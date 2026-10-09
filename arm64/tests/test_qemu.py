@@ -16,12 +16,12 @@ base = [qemu, '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
         '-bios', str(ROOT / 'out' / 'seabios-arm64.bin')]
 
 for name, suffix, expected in [
-    ('no payload', [], ['SeaBIOS-ARM64 bootstrap', 'Device Tree bytes',
-                        'no diagnostic payload', 'halt (WFE)']),
+    ('no payload', [], ['SeaBIOS-ARM64 phase 1', 'Device Tree bytes',
+                        '[boot] not found', 'halt (WFE)']),
     ('with diagnostic payload', [
         '-device', 'loader,file=' + str(ROOT / 'out' / 'diagnostic-payload.bin')
         + ',addr=0x48000000'],
-        ['SeaBIOS-ARM64 bootstrap', 'Device Tree bytes',
+        ['SeaBIOS-ARM64 phase 1', 'Device Tree bytes',
          'valid diagnostic payload', 'CHAINLOAD OK'])
 ]:
     proc = subprocess.Popen(base + suffix, stdout=subprocess.PIPE,
