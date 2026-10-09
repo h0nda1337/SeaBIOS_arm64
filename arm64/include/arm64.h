@@ -28,6 +28,7 @@ void uart_puts(const char *s);
 void uart_hex(uint64_t n);
 void uart_dec(uint64_t n);
 void uart_newline(void);
+void arm64_post_memory(const struct fdt_info *info, const void *dtb);
 void boot_main(void *dtb) __attribute__((noreturn));
 void arm64_handoff(void *entry, void *dtb) __attribute__((noreturn));
 #endif

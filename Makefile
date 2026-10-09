@@ -4,6 +4,12 @@
 #
 # This file may be distributed under the terms of the GNU LGPLv3 license.
 
+# Retain the original x86 build unchanged unless an explicit ARM64 target
+# is requested.  This is a transitional dispatcher, not yet full Kconfig port.
+ifeq ($(ARCH),arm64)
+include arm64/Makefile
+else
+
 # Output directory
 OUT=out/
 
@@ -274,3 +280,5 @@ distclean: clean
 	$(Q)rm -f .config .config.old
 
 -include $(OUT)*.d $(patsubst %,$(OUT)%/*.d,$(DIRS))
+
+endif # ARCH=arm64 (keep upstream x86 Makefile behavior)

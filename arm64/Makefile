@@ -10,7 +10,12 @@ QEMU ?= qemu-system-aarch64
 CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -fno-builtin \
           -fno-stack-protector -fno-pic -fno-pie -nostdlib -O2 \
           -Wall -Wextra -Werror -Wno-unused-parameter -I$(ARM)
-OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o
+# Building original SeaBIOS src/e820map.c and using its src/list.h is an
+# incremental step toward shared subsystems; this is not the full POST port.
+CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include
+OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
+        $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
+        $(OUT)/compat.o $(OUT)/e820map.o
 
 .PHONY: all clean run test qemu-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
@@ -19,6 +24,10 @@ $(OUT):
 	mkdir -p $(OUT)
 
 $(OUT)/%.o: $(ARM)/%.c $(ARM)/include/arm64.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
+                    $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/start.o: $(ARM)/start.S | $(OUT)

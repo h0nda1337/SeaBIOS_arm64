@@ -14,7 +14,12 @@ typedef unsigned int u32;
 typedef signed int s32;
 typedef unsigned long long u64;
 typedef signed long long s64;
+/* AArch64 has 64-bit pointers; keep the original x86 size_t unchanged. */
+#if defined(CONFIG_AARCH64)
+# include <stddef.h>
+#else
 typedef u32 size_t;
+#endif
 
 union u64_u32_u {
     struct { u32 lo, hi; };
@@ -114,7 +119,9 @@ extern void __force_link_error__only_in_16bit(void) __noreturn;
 # define ASSERT32FLAT() do { } while (0)
 #endif
 
+#if !defined(CONFIG_AARCH64)
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
+#endif /* !CONFIG_AARCH64: standard offsetof for AArch64 */
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
@@ -135,7 +142,9 @@ extern void __force_link_error__only_in_16bit(void) __noreturn;
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
+#if !defined(CONFIG_AARCH64)
 #define NULL ((void*)0)
+#endif
 
 #define __weak __attribute__((weak))
 #define __section(S) __attribute__((section(S)))

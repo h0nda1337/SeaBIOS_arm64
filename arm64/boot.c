@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
 #include "include/arm64.h"
+#include "include/bootorder.h"
 
-/* ARM64 diagnostic firmware - not yet a UEFI or legacy BIOS implementation. */
+/* ARM64 staging firmware - not yet a UEFI or legacy BIOS implementation. */
 #define PAYLOAD_MAGIC "SBARMP01"
 #define PAYLOAD_HEADER_SIZE 64u
 
@@ -23,8 +24,16 @@ static uint32_t fnv1a32(const unsigned char *bytes, uint32_t count)
 
 /* Payload format: magic[8], code_length[4], FNV1a[4], reserved[48], code[].
  * The checksum is for catching accidental corruption, NOT authentication. */
-static int try_payload(const struct fdt_info *info, void *dtb)
+struct diagnostic_context {
+    const struct fdt_info *info;
+    void *dtb;
+};
+
+static int try_payload(void *context)
 {
+    const struct diagnostic_context *ctx = context;
+    const struct fdt_info *info = ctx->info;
+    void *dtb = ctx->dtb;
     if (!info->has_ram || info->ram_base > VIRT_PAYLOAD_BASE ||
         info->ram_size <= VIRT_PAYLOAD_BASE - info->ram_base ||
         info->ram_size - (VIRT_PAYLOAD_BASE - info->ram_base) < VIRT_PAYLOAD_MAX)
@@ -52,7 +61,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 bootstrap 0.1 (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 v0.2-dev (AArch64/QEMU virt; untested)\n");
     struct fdt_info info;
     int status = fdt_probe(dtb, &info);
     if (status != 0) {
@@ -83,13 +92,17 @@ void boot_main(void *dtb)
         uart_puts("[arm64] no RAM node found\n");
     }
 
-    int result = try_payload(&info, dtb);
-    if (result == 0)
-        uart_puts("[arm64] no diagnostic payload at 0x48000000\n");
-    else if (result == -1)
-        uart_puts("[arm64] RAM too small for optional payload slot\n");
-    else
-        uart_puts("[arm64] payload rejected: invalid size/checksum\n");
+    /* Initial ARM64 POST memory phase reuses original SeaBIOS E820 code. */
+    arm64_post_memory(&info, dtb);
+    struct diagnostic_context context = { .info = &info, .dtb = dtb };
+    struct arm64_boot_target diagnostic = {
+        .priority = 10,
+        .name = "AArch64 QEMU diagnostic payload",
+        .attempt = try_payload,
+        .context = &context,
+    };
+    arm64_boot_register(&diagnostic);
+    arm64_boot_execute();
 idle:
     uart_puts("[arm64] halt (WFE). OS/UEFI boot not implemented.\n");
     for (;;)

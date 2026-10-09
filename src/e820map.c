@@ -4,10 +4,17 @@
 //
 // This file may be distributed under the terms of the GNU LGPLv3 license.
 
+/* On AArch64, reuse SeaBIOS's original sorted/overlap-aware map code.
+ * The map is INTERNAL: no x86 INT 15h/E820 ABI is offered on AArch64. */
+#ifdef CONFIG_AARCH64
+#include "e820map.h"
+#include "seabios_compat.h"
+#else
 #include "config.h" // BUILD_MAX_E820
 #include "e820map.h" // struct e820entry
 #include "output.h" // dprintf
 #include "string.h" // memmove
+#endif
 
 
 /****************************************************************

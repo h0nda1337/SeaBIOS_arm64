@@ -108,3 +108,10 @@ licenses and copyright notices in the unmodified SeaBIOS source are preserved.
 - **QEMU was not installed in the build environment**; therefore live guest
   serial output/chainload is an expected result, not a measured result.
   Run `make -f arm64/Makefile qemu-test` in your Linux/WSL with QEMU installed.
+
+## Experimental v0.2-dev additions (NOT TESTED)
+
+The ARM64 build now tentatively compiles `src/e820map.c`, and
+`src/list.h` is used for boot candidate ordering. See [PORTING.md](PORTING.md).
+Neither compile nor runtime tests have been performed for these changes.
+The x86 implementation and the original diagnostic payload remain intact.
