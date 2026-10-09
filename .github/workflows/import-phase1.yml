@@ -1,0 +1,35 @@
+name: Import experimental SeaBIOS ARM64 phase 1
+on:
+  push:
+    branches: [experimental/arm64-phase1-v0.3]
+    paths:
+      - 'import/phase1.patch.xz.b64'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import_sources:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-phase1-v0.3
+          fetch-depth: 0
+      - name: Apply original-source-preserving ARM64 patch (NO runtime tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f import/phase1.patch.xz.b64 ]; then
+            echo "Sources already imported"
+            exit 0
+          fi
+          base64 -d import/phase1.patch.xz.b64 | xz -d > /tmp/phase1.patch
+          git apply --check /tmp/phase1.patch
+          git apply /tmp/phase1.patch
+          rm -f import/phase1.patch.xz.b64
+          rmdir import || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'WIP ARM64 phase 1: shared SeaBIOS romfile, fw_cfg and exception diagnostics'
+          git push origin HEAD:experimental/arm64-phase1-v0.3
