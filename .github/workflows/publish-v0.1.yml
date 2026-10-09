@@ -1,0 +1,68 @@
+name: Publish SeaBIOS ARM64 v0.1 sources
+
+on:
+  push:
+    paths:
+      - 'bootstrap/arm64-v0.1.tar.xz.b64'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out destination
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Import upstream SeaBIOS and local AArch64 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bootstrap/arm64-v0.1.tar.xz.b64 || { echo "Already materialized"; exit 0; }
+          git clone --quiet https://github.com/qemu/seabios.git /tmp/upstream-seabios
+          git -C /tmp/upstream-seabios checkout --quiet 81ec9ec0bcf45df11fb7f98339ec9036b546fca0
+          tar -C /tmp/upstream-seabios --exclude=.git -cf - . | tar -xf -
+          base64 --decode bootstrap/arm64-v0.1.tar.xz.b64 | tar -xJf -
+          test -f arm64/Makefile && test -f arm64/start.S && test -f COPYING && test -f COPYING.LESSER
+          rm -f bootstrap/arm64-v0.1.tar.xz.b64
+          rmdir bootstrap || true
+          cat > README.md <<'EOF'
+          # SeaBIOS-ARM64
+
+          Experimental AArch64 bootstrap for QEMU `virt`, developed alongside the original
+          [SeaBIOS](https://github.com/qemu/seabios) x86 codebase.
+
+          **Status: v0.1 — early bootstrap, NOT a complete BIOS port.**
+          It has an ARM64 entry point, PL011 serial console, limited FDT parsing
+          and a custom ARM64 diagnostic chainload. The AArch64 code is in
+          [`arm64/`](arm64/) and has build instructions in
+          [`arm64/README.md`](arm64/README.md). The original x86 sources are preserved.
+
+          Builds and host tests passed during development, but QEMU runtime boot
+          **has not been verified**. It does not boot Linux or Windows ARM64 and
+          must not be flashed to physical devices.
+
+          ```sh
+          sudo apt-get install clang lld llvm qemu-system-arm python3 make
+          make -f arm64/Makefile
+          make -f arm64/Makefile test
+          make -f arm64/Makefile qemu-test
+          ```
+
+          This first revision is intentionally platform-generic; it does not
+          integrate with MotoG20Pkg. Original licenses and notices are preserved
+          (see COPYING, COPYING.LESSER, and individual source headers).
+
+          Upstream SeaBIOS snapshot: `81ec9ec0bcf45df11fb7f98339ec9036b546fca0`.
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Import SeaBIOS source and AArch64 bootstrap v0.1"
+          git push origin HEAD:main
+          git tag -f v0.1
+          git push origin refs/tags/v0.1
