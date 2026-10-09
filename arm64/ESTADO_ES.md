@@ -1,56 +1,21 @@
-# SeaBIOS-ARM64 — estado del primer prototipo
+# SeaBIOS-ARM64 — fase 1, revisión v0.3-dev
 
-## Entregado en esta revisión
+**Compila para AArch64. No se han ejecutado pruebas de arranque en QEMU.**
 
-Se agregó `arm64/` al árbol original de SeaBIOS sin cambiar ni un archivo del
-firmware x86. El prototipo se compila con Clang/LLD para AArch64 y produce un
-firmware binario pensado para la máquina virtual `virt` de QEMU.
+La revisión integra código auténtico de SeaBIOS: `src/e820map.c`,
+`src/romfile.c` y `src/list.h`. Se añadió un backend QEMU fw_cfg-MMIO,
+lectura de reservas del Device Tree, enumeración inicial de transportes
+VirtIO-MMIO, heap temporal de arranque, salida serie
+para mensajes del núcleo original y vectores de excepción EL1/EL2.
 
-- Entrada ARM64 con pila, copia de datos inicializados y limpieza de BSS.
-- Consola serial PL011 con detección de la dirección mediante Device Tree.
-- Lector de Device Tree con límites y detección de memoria/PL011.
-- Transferencia de control a una pequeña rutina ARM64 de diagnóstico cargada
-  de forma externa por QEMU. **No arranca Windows ni Linux**.
-- 12 pruebas automatizadas en el equipo anfitrión, aprobadas.
+El programa diagnóstico comprueba las regiones disponibles del mapa de
+memoria antes de transferir el control. La versión x86 original continúa
+disponible en el mismo árbol y no se ha sustituido por una implementación
+nueva.
 
-## Limitaciones importantes
+**Esto todavía no es un port completo del POST ni del boot manager.** No
+arranca Linux, Windows ARM64 ni programas x86, y carece de UEFI, controladores
+VirtIO de disco y un protocolo de arranque de SO.
 
-**La prueba de ejecución real con QEMU está pendiente**. La máquina de desarrollo
-no tenía `qemu-system-aarch64`; la compilación y los tests del lector FDT no
-sustituyen la ejecución del firmware emulado.
-
-No implementa las llamadas de BIOS x86 (`INT 13h`, etc.). No contiene Boot
-Services de UEFI, ACPI, cargador PE/COFF, controladores de disco, MMU,
-PSCI ni un protocolo de arranque de SO.
-
-Para Windows ARM64 será necesario implementar UEFI (la alternativa más práctica
-es integrar/reutilizar EDK2) y completar las interfaces que necesita Windows.
-
-## Probar en Debian/WSL
-
-```bash
-sudo apt-get update
-sudo apt-get install clang lld llvm qemu-system-arm python3 make
-cd seabios
-make -f arm64/Makefile
-make -f arm64/Makefile test
-make -f arm64/Makefile qemu-test
-```
-
-Resultados esperados de `qemu-test`: dos líneas `PASS`, una sin payload y otra
-con el payload de diagnóstico. Si falla, compartir el resultado completo y la
-versión de QEMU para corregir el siguiente paso.
-
-Para revisar el resultado manualmente:
-
-```bash
-make -f arm64/Makefile run
-```
-
-La ventana de QEMU se cierra pulsando `Ctrl+A`, y después `X`.
-
-## Próximo paso
-
-Verificar la salida serial en QEMU y luego implementar temporizador/excepciones,
-PSCI/EL, detección de bloques VirtIO y un protocolo real de arranque de ARM64.
-La rama Windows ARM64 requerirá UEFI y los servicios de plataforma completos.
+Consulta [PHASE1.md](PHASE1.md) para detalles técnicos, compilación,
+riesgos conocidos y siguientes etapas.

@@ -15,6 +15,22 @@ _start:
     ldr     x0, =__stack_top
     mov     sp, x0
 
+    /* Install vectors at the current privilege level. */
+    mrs     x0, CurrentEL
+    cmp     x0, #8
+    b.eq    .Lvector_el2
+    cmp     x0, #4
+    b.ne    .Lvector_done
+    ldr     x0, =arm64_vectors_el1
+    msr     vbar_el1, x0
+    isb
+    b       .Lvector_done
+.Lvector_el2:
+    ldr     x0, =arm64_vectors_el2
+    msr     vbar_el2, x0
+    isb
+.Lvector_done:
+
     /* Writable globals live in RAM; the executable image stays in flash. */
     ldr     x0, =__data_load
     ldr     x1, =__data_begin
@@ -56,3 +72,33 @@ arm64_handoff:
     isb
     br      x4
 .size arm64_handoff, . - arm64_handoff
+
+/* 16 exception slots, each 128 bytes; vectors must be 2KiB aligned. */
+.section .text.vectors, "ax"
+.balign 2048
+.global arm64_vectors_el1
+arm64_vectors_el1:
+.rept 16
+    b arm64_vector_fault_el1
+    .balign 128
+.endr
+.balign 2048
+.global arm64_vectors_el2
+arm64_vectors_el2:
+.rept 16
+    b arm64_vector_fault_el2
+    .balign 128
+.endr
+.section .text, "ax"
+arm64_vector_fault_el1:
+    mov x0, #1
+    mrs x1, esr_el1
+    mrs x2, elr_el1
+    mrs x3, far_el1
+    b arm64_exception_report
+arm64_vector_fault_el2:
+    mov x0, #2
+    mrs x1, esr_el2
+    mrs x2, elr_el2
+    mrs x3, far_el2
+    b arm64_exception_report

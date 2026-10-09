@@ -61,7 +61,15 @@ class Info(ctypes.Structure):
                 ('uart_base', ctypes.c_uint64),
                 ('dtb_bytes', ctypes.c_uint32),
                 ('has_ram', ctypes.c_int),
-                ('has_uart', ctypes.c_int)]
+                ('has_uart', ctypes.c_int),
+                ('fwcfg_base', ctypes.c_uint64),
+                ('has_fwcfg', ctypes.c_int),
+                ('ram_count', ctypes.c_uint32),
+                ('reserved_count', ctypes.c_uint32),
+                ('ram', ctypes.c_uint64 * 16),
+                ('reserved', ctypes.c_uint64 * 48),
+                ('virtio_count', ctypes.c_uint32),
+                ('virtio_mmio', ctypes.c_uint64 * 64)]
 
 
 class FdtTests(unittest.TestCase):

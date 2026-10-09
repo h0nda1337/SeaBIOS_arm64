@@ -15,7 +15,8 @@ CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -fno-builtin \
 CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include
 OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
-        $(OUT)/compat.o $(OUT)/e820map.o
+        $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
+        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/exception.o $(OUT)/virtio.o
 
 .PHONY: all clean run test qemu-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
@@ -29,6 +30,10 @@ $(OUT)/%.o: $(ARM)/%.c $(ARM)/include/arm64.h | $(OUT)
 $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
                     $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/romfile.o: $(ROOT)/src/romfile.c $(ROOT)/src/romfile.h \
+                   $(ARM)/include/seabios_compat.h | $(OUT)
+	$(CLANG) $(CFLAGS) -Wno-sign-compare -c $< -o $@
 
 $(OUT)/start.o: $(ARM)/start.S | $(OUT)
 	$(CLANG) --target=aarch64-none-elf -c $< -o $@

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
 #include "include/arm64.h"
 #include "include/bootorder.h"
+#include "include/fwcfg.h"
 
 /* ARM64 staging firmware - not yet a UEFI or legacy BIOS implementation. */
 #define PAYLOAD_MAGIC "SBARMP01"
@@ -39,6 +40,8 @@ static int try_payload(void *context)
         info->ram_size - (VIRT_PAYLOAD_BASE - info->ram_base) < VIRT_PAYLOAD_MAX)
         return -1;
 
+    if (!arm64_post_can_load(VIRT_PAYLOAD_BASE, VIRT_PAYLOAD_MAX))
+        return -4;
     const unsigned char *header = (const void *)(uintptr_t)VIRT_PAYLOAD_BASE;
     const char *magic = PAYLOAD_MAGIC;
     for (unsigned i = 0; i < 8; i++)
@@ -51,6 +54,8 @@ static int try_payload(void *context)
     const unsigned char *code = header + PAYLOAD_HEADER_SIZE;
     if (fnv1a32(code, len) != expected)
         return -3;
+    arm64_post_reserve_payload(VIRT_PAYLOAD_BASE,
+                               PAYLOAD_HEADER_SIZE + len);
     uart_puts("[arm64] valid diagnostic payload -> branch ");
     uart_hex((uintptr_t)code);
     uart_newline();
@@ -61,7 +66,8 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 v0.2-dev (AArch64/QEMU virt; untested)\n");
+    uart_puts("\nSeaBIOS-ARM64 phase 1 v0.3-dev (AArch64/QEMU virt)\n");
+    arm64_report_cpu();
     struct fdt_info info;
     int status = fdt_probe(dtb, &info);
     if (status != 0) {
@@ -92,8 +98,27 @@ void boot_main(void *dtb)
         uart_puts("[arm64] no RAM node found\n");
     }
 
-    /* Initial ARM64 POST memory phase reuses original SeaBIOS E820 code. */
-    arm64_post_memory(&info, dtb);
+    /* Real shared SeaBIOS memory-map and ROM-file registries. */
+    if (arm64_post_memory(&info, dtb) != 0) {
+        uart_puts("[arm64] invalid memory layout; refusing handoff\n");
+        goto idle;
+    }
+    if (info.has_fwcfg) {
+        uart_puts("[arm64] QEMU fw_cfg MMIO: ");
+        uart_hex(info.fwcfg_base);
+        uart_newline();
+        int found = arm64_fwcfg_init(info.fwcfg_base);
+        if (found >= 0)
+            arm64_fwcfg_report();
+        else {
+            uart_puts("[arm64] fw_cfg initialization rejected: ");
+            uart_dec((uint32_t)(-found));
+            uart_newline();
+        }
+    } else {
+        uart_puts("[arm64] no fw_cfg node in Device Tree\n");
+    }
+    arm64_virtio_discover(&info);
     struct diagnostic_context context = { .info = &info, .dtb = dtb };
     struct arm64_boot_target diagnostic = {
         .priority = 10,

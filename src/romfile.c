@@ -4,11 +4,18 @@
 //
 // This file may be distributed under the terms of the GNU LGPLv3 license.
 
+/* Keep the original romfile implementation shared across x86 and ARM64.
+ * Only the platform services (allocation, strings and diagnostics) differ. */
+#ifdef CONFIG_AARCH64
+#include "romfile.h"
+#include "seabios_compat.h"
+#else
 #include "config.h" // CONFIG_*
 #include "malloc.h" // free
 #include "output.h" // dprintf
 #include "romfile.h" // struct romfile_s
 #include "string.h" // memcmp
+#endif
 
 static struct romfile_s *RomfileRoot VARVERIFY32INIT;
 

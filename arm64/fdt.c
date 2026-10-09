@@ -61,6 +61,12 @@ struct node_state {
     uint32_t reg_len;
     int is_mem;
     int is_uart;
+    int is_fwcfg;
+    int is_virtio;
+    int is_reserved_parent;
+    int disabled;
+    uint32_t address_cells;
+    uint32_t size_cells;
 };
 
 int fdt_probe(const void *dtb, struct fdt_info *result)
@@ -88,7 +94,12 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
     uint32_t ac = 2, sc = 2; /* standard defaults until root properties */
     result->has_ram = result->has_uart = 0;
     result->ram_base = result->ram_size = result->uart_base = 0;
+    result->fwcfg_base = 0;
+    result->has_fwcfg = 0;
     result->dtb_bytes = total;
+    result->ram_count = 0;
+    result->reserved_count = 0;
+    result->virtio_count = 0;
 
     while (range_valid(pos, 4, size_struct)) {
         uint32_t op = be32(s + pos);
@@ -105,6 +116,12 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
                 return -6;
             if (depth == 1 && streq_bounded(s + start, pos - start + 1, "memory"))
                 nodes[depth].is_mem = 1;
+            if (depth == 1 && streq_bounded(s + start, pos - start + 1,
+                                           "reserved-memory")) {
+                nodes[depth].is_reserved_parent = 1;
+                nodes[depth].address_cells = ac;
+                nodes[depth].size_cells = sc;
+            }
             ++pos;
             pos = (pos + 3u) & ~3u;
             if (pos > size_struct)
@@ -130,13 +147,30 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
             if (depth == 0 && len == 4 &&
                 streq_bounded(name, propnamelen, "#size-cells"))
                 sc = be32(prop);
+            if (depth == 1 && nodes[depth].is_reserved_parent && len == 4) {
+                if (streq_bounded(name, propnamelen, "#address-cells"))
+                    nodes[depth].address_cells = be32(prop);
+                if (streq_bounded(name, propnamelen, "#size-cells"))
+                    nodes[depth].size_cells = be32(prop);
+            }
+            if (depth == 2 && nodes[depth-1].is_reserved_parent &&
+                streq_bounded(name, propnamelen, "status") &&
+                streq_bounded(prop, len, "disabled"))
+                nodes[depth].disabled = 1;
             if (depth == 1 && streq_bounded(name, propnamelen, "device_type") &&
                 streq_bounded(prop, len, "memory"))
                 nodes[depth].is_mem = 1;
-            if (depth == 1 && streq_bounded(name, propnamelen, "compatible") &&
-                compatible_has(prop, len, "arm,pl011"))
-                nodes[depth].is_uart = 1;
-            if (depth == 1 && streq_bounded(name, propnamelen, "reg")) {
+            if (depth == 1 && streq_bounded(name, propnamelen, "compatible")) {
+                if (compatible_has(prop, len, "arm,pl011"))
+                    nodes[depth].is_uart = 1;
+                if (compatible_has(prop, len, "qemu,fw-cfg-mmio"))
+                    nodes[depth].is_fwcfg = 1;
+                if (compatible_has(prop, len, "virtio,mmio"))
+                    nodes[depth].is_virtio = 1;
+            }
+            if ((depth == 1 || (depth == 2 &&
+                 nodes[depth - 1].is_reserved_parent)) &&
+                streq_bounded(name, propnamelen, "reg")) {
                 nodes[depth].reg = prop;
                 nodes[depth].reg_len = len;
             }
@@ -148,18 +182,59 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
             if (depth < 0)
                 return -12;
             struct node_state *n = &nodes[depth];
-            if (depth == 1 && (ac == 1 || ac == 2) && (sc == 1 || sc == 2)
-                && n->reg && n->reg_len >= 4 * (ac + sc)) {
-                uint64_t base = read_cells(n->reg, ac);
-                uint64_t bytes = read_cells(n->reg + ac * 4, sc);
-                if (n->is_mem && bytes && !result->has_ram) {
-                    result->ram_base = base;
-                    result->ram_size = bytes;
-                    result->has_ram = 1;
-                }
-                if (n->is_uart && bytes && !result->has_uart) {
-                    result->uart_base = base;
-                    result->has_uart = 1;
+            const int reserved_child = depth == 2 &&
+                nodes[depth - 1].is_reserved_parent;
+            uint32_t node_ac = reserved_child ?
+                nodes[depth - 1].address_cells : ac;
+            uint32_t node_sc = reserved_child ?
+                nodes[depth - 1].size_cells : sc;
+            if (n->reg && (depth == 1 || reserved_child)) {
+                if ((node_ac != 1 && node_ac != 2) ||
+                    (node_sc != 1 && node_sc != 2))
+                    return -16;
+                uint32_t stride = 4u * (node_ac + node_sc);
+                if (n->reg_len % stride)
+                    return -17;
+                for (uint32_t index = 0; index < n->reg_len;
+                     index += stride) {
+                    uint64_t base = read_cells(n->reg + index, node_ac);
+                    uint64_t bytes = read_cells(n->reg + index +
+                                               node_ac * 4u, node_sc);
+                    if (!bytes || base > UINT64_MAX - bytes)
+                        return -18;
+                    if (depth == 1 && n->is_mem) {
+                        if (result->ram_count >= ARM64_MAX_RAM_BANKS)
+                            return -19;
+                        result->ram[result->ram_count++] =
+                            (struct fdt_region){ base, bytes };
+                        if (!result->has_ram) {
+                            result->ram_base = base;
+                            result->ram_size = bytes;
+                            result->has_ram = 1;
+                        }
+                    }
+                    if (reserved_child && !n->disabled) {
+                        if (result->reserved_count >= ARM64_MAX_RESERVED_REGIONS)
+                            return -20;
+                        result->reserved[result->reserved_count++] =
+                            (struct fdt_region){ base, bytes };
+                    }
+                    if (depth == 1 && n->is_virtio && bytes >= 0x100u) {
+                        if (result->virtio_count >= ARM64_MAX_VIRTIO_MMIO)
+                            return -21;
+                        result->virtio_mmio[result->virtio_count++] =
+                            (struct fdt_region){ base, bytes };
+                    }
+                    if (depth == 1 && n->is_uart && bytes >= 0x34u &&
+                        !result->has_uart) {
+                        result->uart_base = base;
+                        result->has_uart = 1;
+                    }
+                    if (depth == 1 && n->is_fwcfg && bytes >= 0x18u &&
+                        !result->has_fwcfg) {
+                        result->fwcfg_base = base;
+                        result->has_fwcfg = 1;
+                    }
                 }
             }
             --depth;
@@ -170,4 +245,45 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
         }
     }
     return -15;
+}
+
+/* Device Tree memreserve entries are 16-byte big-endian address/length
+ * pairs terminated by 0,0. Reject malformed layouts rather than walk
+ * outside the declared DTB buffer. */
+static uint64_t be64(const unsigned char *p)
+{
+    return ((uint64_t)be32(p) << 32) | be32(p + 4);
+}
+
+int fdt_for_each_reservation(const void *dtb,
+                             fdt_reservation_fn fn, void *ctx)
+{
+    if (!dtb || !fn)
+        return -1;
+    const unsigned char *d = dtb;
+    if (be32(d) != FDT_MAGIC)
+        return -2;
+    uint32_t total = be32(d + 4);
+    if (total < 56 || total > FDT_MAX_BYTES)
+        return -3;
+    uint32_t off = be32(d + 16);
+    uint32_t struct_off = be32(d + 8);
+    if (off < 40 || (off & 7u) || struct_off > total ||
+        off > struct_off || struct_off - off < 16)
+        return -4;
+    int reservations = 0;
+    while (off <= struct_off - 16) {
+        uint64_t address = be64(d + off);
+        uint64_t size = be64(d + off + 8);
+        off += 16;
+        if (address == 0 && size == 0)
+            return reservations;
+        if (!size || address > UINT64_MAX - size)
+            return -5;
+        int status = fn(address, size, ctx);
+        if (status)
+            return status;
+        ++reservations;
+    }
+    return -6;
 }
