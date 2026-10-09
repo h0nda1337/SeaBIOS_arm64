@@ -17,8 +17,10 @@ def pad4(buf):
     return buf + b'\0' * ((-len(buf)) % 4)
 
 
-def build_dtb(*, uart=True, wrong_len=False, add_unknown=False):
-    names = ('#address-cells', '#size-cells', 'device_type', 'compatible', 'reg')
+def build_dtb(*, uart=True, wrong_len=False, add_unknown=False,
+              fwcfg=False, disabled_uart=False):
+    names = ('#address-cells', '#size-cells', 'device_type', 'compatible',
+             'reg', 'status')
     stringtab = b''
     offs = {}
     for name in names:
@@ -38,6 +40,14 @@ def build_dtb(*, uart=True, wrong_len=False, add_unknown=False):
         s += node('pl011@9000000')
         s += prop('compatible', b'arm,pl011\0arm,primecell\0')
         s += prop('reg', be(0) + be(0x09000000) + be(0) + be(0x1000))
+        if disabled_uart:
+            s += prop('status', b'disabled\0')
+        s += be(2)
+    if fwcfg:
+        s += node('fw-cfg@9020000')
+        s += prop('compatible', b'qemu,fw-cfg-mmio\0')
+        # Real QEMU virt DTB can expose only data+selector (10 bytes).
+        s += prop('reg', be(0) + be(0x09020000) + be(0) + be(10))
         s += be(2)
     if add_unknown:
         s += node('random@a000000') + prop('compatible', b'unknown-device\0') + be(2)
@@ -112,6 +122,17 @@ class FdtTests(unittest.TestCase):
         rc, out = self.probe(build_dtb(add_unknown=True))
         self.assertEqual(rc, 0)
         self.assertTrue(out.has_uart)
+
+    def test_fwcfg_ten_byte_window(self):
+        rc, out = self.probe(build_dtb(fwcfg=True))
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.has_fwcfg)
+        self.assertEqual(out.fwcfg_base, 0x09020000)
+
+    def test_disabled_uart_is_not_probed(self):
+        rc, out = self.probe(build_dtb(disabled_uart=True))
+        self.assertEqual(rc, 0)
+        self.assertFalse(out.has_uart)
 
     def test_bad_magic(self):
         data = b'0000' + build_dtb()[4:]
