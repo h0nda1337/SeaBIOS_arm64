@@ -35,11 +35,11 @@ static int try_payload(void *context)
     const struct diagnostic_context *ctx = context;
     const struct fdt_info *info = ctx->info;
     void *dtb = ctx->dtb;
-    if (!info->has_ram || info->ram_base > VIRT_PAYLOAD_BASE ||
-        info->ram_size <= VIRT_PAYLOAD_BASE - info->ram_base ||
-        info->ram_size - (VIRT_PAYLOAD_BASE - info->ram_base) < VIRT_PAYLOAD_MAX)
+    /* The original SeaBIOS E820 map describes all RAM banks and firmware
+     * reservations. Do not assume the first FDT memory node contains the
+     * payload (e.g. an emulated machine can expose discontiguous RAM). */
+    if (!info->has_ram)
         return -1;
-
     if (!arm64_post_can_load(VIRT_PAYLOAD_BASE, VIRT_PAYLOAD_MAX))
         return -4;
     const unsigned char *header = (const void *)(uintptr_t)VIRT_PAYLOAD_BASE;
