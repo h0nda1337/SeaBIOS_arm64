@@ -61,7 +61,7 @@ static int copy_file(struct romfile_s *file, void *dst, uint32_t maxlen)
 
 int arm64_fwcfg_init(uint64_t base)
 {
-    if (!base || (base & 1u) || base > (uint64_t)UINTPTR_MAX - 0x20u)
+    if (!base || (base & 1u) || base > (uint64_t)UINTPTR_MAX - 0x0au)
         return -1;
     fwcfg_base = (uintptr_t)base;
     select_item(0); /* FW_CFG_SIGNATURE */
