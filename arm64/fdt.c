@@ -153,7 +153,8 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
                 if (streq_bounded(name, propnamelen, "#size-cells"))
                     nodes[depth].size_cells = be32(prop);
             }
-            if (depth == 2 && nodes[depth-1].is_reserved_parent &&
+            if ((depth == 1 || (depth == 2 &&
+                 nodes[depth - 1].is_reserved_parent)) &&
                 streq_bounded(name, propnamelen, "status") &&
                 streq_bounded(prop, len, "disabled"))
                 nodes[depth].disabled = 1;
@@ -188,7 +189,7 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
                 nodes[depth - 1].address_cells : ac;
             uint32_t node_sc = reserved_child ?
                 nodes[depth - 1].size_cells : sc;
-            if (n->reg && (depth == 1 || reserved_child)) {
+            if (n->reg && !n->disabled && (depth == 1 || reserved_child)) {
                 if ((node_ac != 1 && node_ac != 2) ||
                     (node_sc != 1 && node_sc != 2))
                     return -16;
