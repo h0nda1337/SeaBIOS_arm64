@@ -230,7 +230,7 @@ int fdt_probe(const void *dtb, struct fdt_info *result)
                         result->uart_base = base;
                         result->has_uart = 1;
                     }
-                    if (depth == 1 && n->is_fwcfg && bytes >= 0x18u &&
+                    if (depth == 1 && n->is_fwcfg && bytes >= 0x0au &&
                         !result->has_fwcfg) {
                         result->fwcfg_base = base;
                         result->has_fwcfg = 1;
