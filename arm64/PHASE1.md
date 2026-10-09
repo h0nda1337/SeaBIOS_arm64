@@ -26,7 +26,8 @@ remain separate, and their replacements in `arm64/` are transitional.
 
 - QEMU `virt` flattened Device Tree supplies RAM, PL011 UART, fw_cfg and
   up to 32 VirtIO MMIO transports. The memory map accepts up to eight RAM
-  regions and 24 `/reserved-memory` spans.
+  regions and 24 `/reserved-memory` spans. Explicitly disabled nodes are
+  excluded before probing their MMIO ranges.
 - The FDT memreserve table is parsed and clipped to the RAM range before it
   is inserted into the upstream E820 map. `/reserved-memory` child-node
   regions are also reserved. A malformed reservation table
@@ -34,16 +35,19 @@ remain separate, and their replacements in `arm64/` are transitional.
 - Real `src/romfile.c` now works with a temporary fixed-size allocator,
   freestanding strings and an ARM64 UART debug-formatting shim.
 - The QEMU fw_cfg MMIO backend reads the signature and file directory,
-  registers up to 48 small ROM files through `romfile_add()` and optionally
-  reads `bootorder` via `romfile_loadfile()`. It is a sequential polling
-  backend, not a fw_cfg DMA driver.
+  registers up to 48 small ROM files through `romfile_add()`, enumerates
+  them via the **original** `romfile_findprefix()` and optionally reads
+  `bootorder` via `romfile_loadfile()`. The DTB parser accepts the 10-byte
+  MMIO window declared by QEMU (DMA is optional). It is a sequential
+  polling backend, not a fw_cfg DMA driver.
 - An early VirtIO-MMIO enumerator checks the standard magic, version,
   device and vendor ID registers. No virtqueue or block I/O is implemented.
 - EL1/EL2 exception vectors log ESR/ELR/FAR over the QEMU virtual PL011.
   No exception recovery, GIC, ACPI or MMU is implemented yet.
 - The demonstration loader checks that its fixed 1 MiB staging range is
   actually available according to the upstream memory map before accessing
-  or entering the synthetic AArch64 payload.
+  or entering the synthetic AArch64 payload, rather than relying on a
+  single RAM bank.
 
 ## Build
 
@@ -57,6 +61,52 @@ make ARCH=arm64
 
 Firmware output: `arm64/out/seabios-arm64.bin`.
 The legacy x86 build is still selected with the default `make` command.
+
+Static source provenance can be inspected in the resulting ELF using:
+
+```sh
+nm arm64/out/seabios-arm64.elf | grep -E ' e820_add$| romfile_(add|findprefix|loadfile)
+For later validation on an appropriate host (not performed for this stage):
+
+```sh
+make ARCH=arm64 test
+make ARCH=arm64 qemu-test
+```
+
+## Known limitations and unverified assumptions
+
+1. QEMU runtime behavior (MMIO fw_cfg selection endianness, boot entry EL,
+   Device Tree location and UART timing) has **not** been measured. A clean
+   compiler/linker result is not evidence of a bootable firmware.
+2. The E820 map is an *internal SeaBIOS data structure*; ARM64 does not expose
+   the x86 INT 15h E820 ABI. Up to eight RAM banks and 24 reserved-memory
+   regions are tracked, but generic bus `ranges` address translations and
+   arbitrary Device Tree layouts are not yet supported.
+3. Boot file sizes are limited by the fixed 64 KiB POST allocator. Its
+   `free()` intentionally does not reclaim individual allocations. This is
+   not a replacement for upstream `src/malloc.c`.
+4. The diagnostic QEMU loader accepts a fixed custom header and FNV1a
+   checksum; the latter is **not a cryptographic signature**. It does not
+   boot a Linux Image, EFI binary or Windows on ARM.
+5. The AArch64 vector tables diagnose fatal exceptions only. PSCI, GIC,
+   timers, block storage, real boot priority and UEFI are still absent.
+6. The ROM-file debug sink only covers the printf formats currently used by
+   the shared modules. It is not a port of SeaBIOS's complete VGA/serial
+   output subsystem.
+7. All new code targets QEMU `virt` first. Do not flash to any physical
+   ARM device, including the Moto G20.
+
+## Planned Phase 2
+
+Develop architecture-backed timer and IRQ services; add PCIe/virtio-mmio
+transport, real storage discovery and a bootable standard AArch64 kernel
+handoff; progressively refactor the shared SeaBIOS boot-priority logic from
+`src/boot.c`. UEFI for Windows on ARM is a separate, much larger milestone.
+
+```
+
+These functions are linked from the original `src/e820map.c` and
+`src/romfile.c`, not renamed duplicate implementations in `arm64/`.
 
 For later validation on an appropriate host (not performed for this stage):
 
