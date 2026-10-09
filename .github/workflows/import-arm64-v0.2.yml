@@ -1,0 +1,37 @@
+name: Import experimental ARM64 v0.2 sources
+on:
+  push:
+    branches:
+      - experimental/arm64-core-v0.2
+    paths:
+      - bootstrap/arm64-v0.2.patch.xz.b64
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-core-v0.2
+          fetch-depth: 0
+      - name: Import source patch only (no build or tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f bootstrap/arm64-v0.2.patch.xz.b64 ]; then
+            echo "Source patch was already materialized."
+            exit 0
+          fi
+          base64 --decode bootstrap/arm64-v0.2.patch.xz.b64 | xz --decompress > /tmp/arm64-v0.2.patch
+          git apply --check /tmp/arm64-v0.2.patch
+          git apply /tmp/arm64-v0.2.patch
+          rm bootstrap/arm64-v0.2.patch.xz.b64
+          rmdir bootstrap || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'WIP: reuse SeaBIOS memory map and hlist on AArch64 (untested)'
+          git push origin HEAD:experimental/arm64-core-v0.2
