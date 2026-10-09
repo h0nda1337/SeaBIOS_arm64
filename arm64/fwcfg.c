@@ -106,6 +106,17 @@ void arm64_fwcfg_report(void)
     uart_puts("[fwcfg] registered romfiles: ");
     uart_dec(file_count);
     uart_newline();
+    /* Enumerate via the original SeaBIOS registry implementation rather
+     * than reimplementing file traversal in this ARM-specific backend. */
+    struct romfile_s *it = NULL;
+    for (unsigned n = 0; n < 8u; ++n) {
+        it = romfile_findprefix("", it);
+        if (!it)
+            break;
+        uart_puts("[fwcfg] romfile: ");
+        uart_puts(it->name);
+        uart_newline();
+    }
     /* Uses the actual upstream romfile_loadfile() and boot-time allocator. */
     char *order = romfile_loadfile("bootorder", NULL);
     if (!order) {
