@@ -1,6 +1,6 @@
 # Phase 1 — shared SeaBIOS services on AArch64 (v0.3-dev)
 
-**Status: cross-compiled, not QEMU-boot-tested. Experimental source, not production firmware.**
+**Status: cross-compiled and QEMU smoke-tested (10.0.13). Experimental source, not production firmware.**
 
 ## Scope and rationale
 
@@ -71,18 +71,24 @@ nm arm64/out/seabios-arm64.elf | grep -E ' e820_add$| romfile_(add|findprefix|lo
 These functions are linked from the original `src/e820map.c` and
 `src/romfile.c`, not renamed duplicate implementations in `arm64/`.
 
-For later validation on an appropriate host (not performed for this stage):
+Validated on the development host with QEMU 10.0.13 (see [QEMU_VALIDATION.md](QEMU_VALIDATION.md)):
 
 ```sh
 make ARCH=arm64 test
 make ARCH=arm64 qemu-test
 ```
 
+## AArch64 build fix verified in QEMU
+
+The ARM64 CFLAGS include `-mgeneral-regs-only` and `-mstrict-align` to avoid
+FP/SIMD operations before enabling the required CPU state and to prevent
+unaligned memory accesses in the early freestanding firmware. This is an
+initial compatibility workaround, not a replacement for platform-specific
+CPU initialization. The existing x86 build flags are unchanged.
+
 ## Known limitations and unverified assumptions
 
-1. QEMU runtime behavior (MMIO fw_cfg selection endianness, boot entry EL,
-   Device Tree location and UART timing) has **not** been measured. A clean
-   compiler/linker result is not evidence of a bootable firmware.
+1. QEMU 10.0.13 boot was smoke-tested on the `virt` machine (Cortex-A72, 512 MiB) and automated `qemu-test` checks passed for both no-payload and diagnostic-chainload paths. This does **not** establish portability to other QEMU versions, other ARM platforms, or OS bootability.
 2. The E820 map is an *internal SeaBIOS data structure*; ARM64 does not expose
    the x86 INT 15h E820 ABI. Up to eight RAM banks and 24 reserved-memory
    regions are tracked, but generic bus `ranges` address translations and
