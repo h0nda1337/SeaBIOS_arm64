@@ -7,7 +7,7 @@ CLANG ?= clang
 LLD ?= ld.lld
 OBJCOPY ?= llvm-objcopy
 QEMU ?= qemu-system-aarch64
-CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -fno-builtin \
+CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -mgeneral-regs-only -mstrict-align -fno-builtin \
           -fno-stack-protector -fno-pic -fno-pie -nostdlib -O2 \
           -Wall -Wextra -Werror -Wno-unused-parameter -I$(ARM)
 # Building original SeaBIOS src/e820map.c and using its src/list.h is an
