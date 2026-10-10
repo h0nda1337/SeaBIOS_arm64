@@ -1,0 +1,36 @@
+name: Import ARM64 v0.4 batched-read hardening
+on:
+  push:
+    branches:
+      - experimental/arm64-phase2-v0.4
+    paths:
+      - 'bootstrap/arm64-v0.4-batch.patch.xz.b64'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-phase2-v0.4
+          fetch-depth: 0
+      - name: Import verified incremental source patch
+        run: |
+          set -euo pipefail
+          input=bootstrap/arm64-v0.4-batch.patch.xz.b64
+          if [ ! -f "$input" ]; then
+            echo "Already imported"; exit 0
+          fi
+          base64 -d "$input" | xz -dc >/tmp/arm64-batch.patch
+          printf '%s\n' '42c378547dd369d089e1bc16e5ab3037ad76cf9011cb7f655519d8338fa4eb43  /tmp/arm64-batch.patch' | sha256sum -c -
+          git apply --check /tmp/arm64-batch.patch
+          git apply /tmp/arm64-batch.patch
+          rm "$input"
+          rmdir bootstrap || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Improve ARM64 VirtIO bulk reads and verify full 16-KiB synthetic Image"
+          git push origin HEAD:experimental/arm64-phase2-v0.4
