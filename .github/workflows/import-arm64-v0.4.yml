@@ -1,0 +1,43 @@
+name: Import SeaBIOS ARM64 phase 2 v0.4 source
+on:
+  push:
+    branches:
+      - experimental/arm64-phase2-v0.4
+    paths:
+      - 'bootstrap/arm64-v0.4.patch.xz.b64'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-phase2-v0.4
+          fetch-depth: 0
+      - name: Verify and import AArch64 phase 2 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          input=bootstrap/arm64-v0.4.patch.xz.b64
+          if [ ! -f "$input" ]; then
+            echo "Source patch already imported; nothing to do."
+            exit 0
+          fi
+          base64 --decode "$input" | xz -dc > /tmp/v04.patch
+          echo "9a631471e964759535b77cdb92ec092bc7e529b3df06488b6cedee0706f3c49d  /tmp/v04.patch" | sha256sum -c -
+          git apply --check /tmp/v04.patch
+          git apply /tmp/v04.patch
+          test -f arm64/PHASE2.md
+          test -f src/hw/virtio-ring-common.h
+          test -f src/hw/virtio-mmio.c
+          rm "$input"
+          rmdir bootstrap || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Port SeaBIOS VirtIO ring and MMIO to AArch64; add disk/Image loader (v0.4-dev)"
+          git push origin HEAD:experimental/arm64-phase2-v0.4
