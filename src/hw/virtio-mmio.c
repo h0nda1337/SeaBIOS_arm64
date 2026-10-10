@@ -42,6 +42,7 @@
 #define VIRTIO_BLK_ID       2u
 #define VIRTQ_SIZE          8u
 #define SECTOR_SIZE         512u
+#define MAX_READ_SECTORS    16u
 /* Bounded polling is necessary until PSCI timers and IRQ/GIC exist. */
 #define WAIT_SPINS          5000000u
 
@@ -51,7 +52,8 @@ static struct vring_virtqueue BlockQueue __attribute__((aligned(4096)));
 static struct vp_device Transport;
 static struct virtio_blk_outhdr Request __attribute__((aligned(16)));
 static uint8_t StatusByte;
-static uint8_t Sector[SECTOR_SIZE] __attribute__((aligned(16)));
+static uint8_t Transfer[SECTOR_SIZE * MAX_READ_SECTORS]
+    __attribute__((aligned(16)));
 
 
 void arm64_virtio_barrier(void)
@@ -166,9 +168,10 @@ error:
 
 /* One in-flight request. The original SeaBIOS virtio_blk_outhdr and
  * vring_desc are shared, while AArch64 requires its own transport routines. */
-int arm64_virtio_blk_read(uint64_t lba, void *out)
+int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count)
 {
-    if (!BlockBase || !out || lba >= BlockSectors)
+    if (!BlockBase || !out || !count || count > MAX_READ_SECTORS ||
+        lba >= BlockSectors || count > BlockSectors - lba)
         return -1;
     Request.type = VIRTIO_BLK_T_IN;
     Request.ioprio = 0;
@@ -176,7 +179,7 @@ int arm64_virtio_blk_read(uint64_t lba, void *out)
     StatusByte = 0xffu;
     struct vring_list sg[] = {
         { (char *)&Request, sizeof(Request) },
-        { (char *)Sector, SECTOR_SIZE },
+        { (char *)Transfer, SECTOR_SIZE * count },
         { (char *)&StatusByte, 1 },
     };
     /* Reuse original upstream SeaBIOS descriptor-chain implementation. */
@@ -193,7 +196,7 @@ int arm64_virtio_blk_read(uint64_t lba, void *out)
         BlockQueue.vring.used->ring[BlockQueue.last_used_idx % VIRTQ_SIZE].id
            >= VIRTQ_SIZE ||
         BlockQueue.vring.used->ring[BlockQueue.last_used_idx % VIRTQ_SIZE].len
-           < SECTOR_SIZE + 1 || StatusByte != VIRTIO_BLK_S_OK) {
+           < SECTOR_SIZE * count + 1 || StatusByte != VIRTIO_BLK_S_OK) {
         wr(BlockBase, MMIO_STATUS, 0);
         BlockBase = 0;
         return -2;
@@ -202,9 +205,14 @@ int arm64_virtio_blk_read(uint64_t lba, void *out)
     uint32_t irq = rd(BlockBase, MMIO_INT_STATUS);
     if (irq) wr(BlockBase, MMIO_INT_ACK, irq);
     uint8_t *dst = out;
-    for (unsigned i = 0; i < SECTOR_SIZE; i++)
-        dst[i] = Sector[i];
+    for (unsigned i = 0; i < SECTOR_SIZE * count; i++)
+        dst[i] = Transfer[i];
     return 0;
+}
+
+int arm64_virtio_blk_read(uint64_t lba, void *out)
+{
+    return arm64_virtio_blk_read_many(lba, out, 1);
 }
 
 uint64_t arm64_virtio_blk_capacity(void)

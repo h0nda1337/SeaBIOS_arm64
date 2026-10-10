@@ -32,7 +32,9 @@ are not yet compiled or executed on ARM64.
 1. ARM64 EL1 entry, exception vector diagnostics, PL011, generic timer
    (`CNTFRQ_EL0`/`CNTVCT_EL0`), and FDT memory reservations on QEMU `virt`.
 2. Working read-only VirtIO-MMIO block I/O through *both* version 1 (legacy)
-   and version 2 (modern) transports, including multiple sectors in sequence.
+   and version 2 (modern) transports. Reads can transfer up to 16 sectors per
+   request; a 32-sector synthetic Image has its final byte verified after
+   two successive requests using the original SeaBIOS split-ring code.
 3. MBR: active Linux type 0x83 partition (or first matching fallback).
 4. GPT: primary header CRC32 + partition-array CRC32 are checked; first
    Linux filesystem GUID (`0fc63daf-8483-4772-8e79-3d69d8477de4`)
@@ -86,7 +88,7 @@ not a sign that a real OS returned successfully.
   conventional ext4/FAT filesystem in that partition.
 - The GPT implementation validates only bounded primary tables with exactly
   128-byte entries and counts divisible by four; backup GPT is not implemented.
-- Block I/O is **read-only**, single request in flight, physical-address
+- Block I/O is **read-only**, single request in flight (up to 16 sectors / 8 KiB per read), physical-address
   identity mapping, no IOMMU, no cache-coherence abstraction for hardware
   outside QEMU, bounded polling rather than interrupts, and one device.
 - The existing POST and boot-manager compatibility shims are *not* the

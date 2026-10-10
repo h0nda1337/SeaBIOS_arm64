@@ -13,8 +13,8 @@ p.add_argument('--bad-crc', action='store_true')
 p.add_argument('--bad-array-crc', action='store_true')
 a = p.parse_args()
 image = a.image.read_bytes()
-assert 64 <= len(image) <= 4096 and image[56:60] == b'ARM\x64'
-image = image.ljust(4096, b'\0')
+assert 64 <= len(image) <= 16384 and image[56:60] == b'ARM\x64'
+image = image.ljust(16384, b'\0')
 sectors, first, last = 6144, 2048, 2048 + 1024 - 1
 partition_guid = uuid.UUID('0fc63daf-8483-4772-8e79-3d69d8477de4').bytes_le
 entries = bytearray(128 * 128)

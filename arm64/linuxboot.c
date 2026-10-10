@@ -4,13 +4,14 @@
 #include "include/bootorder.h"
 #include "include/gpt.h"
 
-/* A tiny direct Linux Image handoff from a raw MBR Linux partition.
- * It has NO filesystem, EFI, initrd, DTB relocation, GPT or signature
- * verification.  Target is QEMU virt AArch64 only.  Not a generic BIOS yet. */
+/* A minimal direct Linux Image handoff from a raw MBR/GPT Linux partition.
+ * This deliberately omits filesystems, EFI, initrd, DTB relocation and
+ * cryptographic signature checks. Only QEMU virt has been tested. */
 #define LINUX_BASE UINT64_C(0x48000000) /* 2 MiB aligned inside QEMU RAM */
 #define LINUX_MBR_PARTITION_TYPE 0x83u
 #define SECTOR_BYTES 512u
 static uint8_t Sector[SECTOR_BYTES];
+static uint8_t ReadBatch[SECTOR_BYTES * 16u];
 static uint8_t DiskMBR[SECTOR_BYTES];
 static uint64_t LinuxFirstSector;
 static uint64_t LinuxSectorCount;
@@ -42,15 +43,20 @@ static int boot_linux_image(void *context)
     uart_hex(size);
     uart_newline();
     unsigned char *dst = (unsigned char *)(uintptr_t)dest;
-    for (uint64_t block = 0; block < blocks; ++block) {
-        if (arm64_virtio_blk_read(LinuxFirstSector + block, Sector)) {
+    for (uint64_t block = 0; block < blocks;) {
+        uint64_t remain = blocks - block;
+        uint32_t count = (uint32_t)(remain < 16u ? remain : 16u);
+        if (arm64_virtio_blk_read_many(LinuxFirstSector + block,
+                                       ReadBatch, count)) {
             uart_puts("[linux] disk read error, refusing boot\n");
             return -2;
         }
         uint64_t left = size - block * SECTOR_BYTES;
-        size_t chunk = left < SECTOR_BYTES ? (size_t)left : SECTOR_BYTES;
+        size_t chunk = left < SECTOR_BYTES * count ? (size_t)left :
+                       SECTOR_BYTES * count;
         for (size_t i = 0; i < chunk; ++i)
-            dst[block * SECTOR_BYTES + i] = Sector[i];
+            dst[block * SECTOR_BYTES + i] = ReadBatch[i];
+        block += count;
     }
     arm64_post_reserve_payload(dest, size);
     uart_puts("[linux] Image loaded; entering AArch64 Image entry\n");

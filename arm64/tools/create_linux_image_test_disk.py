@@ -10,15 +10,15 @@ parser.add_argument('output', type=Path, help='raw disk image output path')
 parser.add_argument('--corrupt', action='store_true', help='invalidate ARM64 Image magic')
 args = parser.parse_args()
 code = bytearray(args.image.read_bytes())
-if len(code) > 4096:
-    parser.error('synthetic image exceeds eight sectors')
+if len(code) > 16384:
+    parser.error('synthetic image exceeds 32 sectors')
 if len(code) < 64 or code[56:60] != b'ARM\x64':
     parser.error('not a valid synthetic ARM64 Image header')
-code += bytes(4096 - len(code))
+code += bytes(16384 - len(code))
 if args.corrupt:
     code[56:60] = b'NOPE'
 start = 2048
-sectors = 4096
+sectors = 16384
 mbr = bytearray(512)
 part = 446
 mbr[part] = 0x80

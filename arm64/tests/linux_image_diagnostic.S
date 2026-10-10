@@ -8,7 +8,7 @@ synthetic_image_start:
     b synthetic_main
     .word 0
     .quad 0x80000 /* text_offset */
-    .quad 4096    /* image_size: eight disk sectors */
+    .quad 16384   /* image_size: 32 sectors, two 16-sector requests */
     .quad 0       /* little-endian, any page size */
     .quad 0
     .quad 0
@@ -16,8 +16,18 @@ synthetic_image_start:
     .word 0x644d5241  /* ARM\x64 */
     .word 0
 synthetic_main:
+    /* Check a byte at the very last offset of the 32-sector test Image.
+     * This forces the test to verify the second 16-sector VirtIO transfer. */
+    adr x5, .Ltail
+    ldrb w6, [x5]
+    cmp w6, #0x51
+    b.ne .Lbad
     ldr x1, =0x09000000
     adr x2, .Lmsg
+    b .Lloop
+.Lbad:
+    ldr x1, =0x09000000
+    adr x2, .Lbadmsg
 .Lloop:
     ldrb w3, [x2], #1
     cbz w3, .Lwait
@@ -30,4 +40,9 @@ synthetic_main:
     wfe
     b .Lwait
 .Lmsg:
-    .asciz "\r\n[linux] SYNTHETIC IMAGE HANDOFF OK (not Linux)\r\n"
+    .asciz "\r\n[linux] SYNTHETIC IMAGE HANDOFF OK (not Linux; tail verified)\r\n"
+.Lbadmsg:
+    .asciz "\r\n[linux] SYNTHETIC IMAGE TAIL CORRUPT\r\n"
+    .org 16383
+.Ltail:
+    .byte 0x51
