@@ -16,9 +16,19 @@
  *
  */
 
+#if CONFIG_AARCH64
+#include "virtio-ring.h"
+#include "../../arm64/include/virtio_adapter.h"
+#define GET_LOWFLAT(p) (p)
+#define virt_to_phys(p) ((uintptr_t)(p))
+#define smp_rmb() arm64_virtio_barrier()
+#define smp_wmb() arm64_virtio_barrier()
+#define panic(...) arm64_virtio_panic()
+#else
 #include "output.h" // panic
 #include "virtio-ring.h"
 #include "virtio-pci.h"
+#endif
 
 #define BUG() do {                                                      \
             panic("BUG: failure at %d/%s()!\n", __LINE__, __func__);    \

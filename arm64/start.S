@@ -68,6 +68,9 @@ arm64_handoff:
     mov     x1, xzr
     mov     x2, xzr
     mov     x3, xzr
+    /* Ensure freshly loaded AArch64 instructions are visible at the PoU. */
+    dsb     sy
+    ic      iallu
     dsb     sy
     isb
     br      x4

@@ -9,31 +9,34 @@ identity: its architecture, boot flow, recognizable C subsystems and original
 x86 build wherever technically possible. ARM64-specific hardware interfaces
 should be isolated behind architecture backends, not silently replace SeaBIOS.
 
-### Experimental Phase 1 — v0.3-dev
+### Experimental Phase 2 — v0.4-dev
 
-This branch now cross-compiles the genuine SeaBIOS `src/e820map.c` and
-`src/romfile.c` implementations into an AArch64 firmware for QEMU `virt`.
-It also reuses `src/list.h`, detects RAM and reserved memory through FDT,
-implements a PL011 diagnostic console, discovers VirtIO-MMIO transport slots
-and accesses QEMU firmware files through an ARM64 `fw_cfg` MMIO backend.
+The AArch64 firmware now cross-compiles and **executes** the original
+SeaBIOS `src/e820map.c`, `src/romfile.c`, and `src/hw/virtio-ring.c`.
+The original `src/hw/virtio-mmio.c` is now architecture-selective, preserving
+its x86 implementation and providing an ARM64 backend for QEMU `virt`.
 
-**Important:** This is not yet a complete SeaBIOS port. The original POST,
-boot manager, storage drivers and x86 BIOS interrupt ABI have not been ported.
-There is no UEFI implementation, and Linux/Windows ARM64 cannot boot yet.
-Compilation succeeded, but **QEMU runtime and unit tests were not run**.
-Do not flash this experimental firmware to physical hardware.
+Read-only VirtIO block I/O supports legacy and modern MMIO. A limited loader
+can find raw ARM64 Linux `Image` headers at the start of selected MBR or
+validated GPT Linux partitions, copy them into bounded RAM, and transfer
+control using the AArch64 Linux Image register convention. **The successful
+runtime tests used synthetic ARM64 machine-code stubs, NOT a real Linux kernel.**
 
-Source and design notes: [arm64/](arm64/) · [Phase 1 details](arm64/PHASE1.md)
+The original x86 `make` build still succeeds, while `make ARCH=arm64` builds
+the experimental AArch64 target. Tests were run against QEMU 10.0.13.
+
+Source, build instructions, results and limitations: [Phase 2](arm64/PHASE2.md).
 
 ```sh
 make ARCH=arm64
-# firmware output: arm64/out/seabios-arm64.bin
+make ARCH=arm64 test
+make ARCH=arm64 qemu-test
+make ARCH=arm64 qemu-disk-test
 ```
 
-The original x86 build remains the default when invoking `make` without `ARCH`.
-Windows on ARM is a **long-term research objective** and would require a
-compatible UEFI environment. x86 machine-code compatibility would additionally
-require translation or emulation.
+**Important:** SeaBIOS-ARM64 is not a full BIOS port. There is no complete
+SeaBIOS POST, full boot manager, filesystem loader, UEFI, Windows ARM64 boot,
+or validated real Linux distribution boot. Never flash it to a physical device.
 
 ### Español
 
@@ -42,8 +45,10 @@ original.** No buscamos desarrollar otro firmware que simplemente utilice su
 nombre. La primera etapa ya enlaza módulos originales de SeaBIOS en AArch64,
 pero aún no implementa su POST completo, el arranque de sistemas operativos ni UEFI.
 
-**Estado:** v0.3-dev, compilación cruzada completada; arranque en QEMU no
-verificado. Consulta [PHASE1.md](arm64/PHASE1.md) para las limitaciones técnicas.
+**Estado:** v0.4-dev, compilación ARM64 y x86 verificadas; lectura de
+sectores y salto a código ARM64 sintético probados en QEMU 10.0.13.
+Todavía no se ha arrancado un kernel Linux auténtico ni Windows ARM64.
+Consulta [PHASE2.md](arm64/PHASE2.md) para conocer las limitaciones.
 
 ---
 

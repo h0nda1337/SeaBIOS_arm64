@@ -12,19 +12,30 @@ CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -mgeneral-regs
           -Wall -Wextra -Werror -Wno-unused-parameter -I$(ARM)
 # Building original SeaBIOS src/e820map.c and using its src/list.h is an
 # incremental step toward shared subsystems; this is not the full POST port.
-CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include
+CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src
 OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
-        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/exception.o $(OUT)/virtio.o
+        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
+        $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
+        $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o
 
-.PHONY: all clean run test qemu-test
+.PHONY: all clean run test qemu-test qemu-disk-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
 	mkdir -p $(OUT)
 
 $(OUT)/%.o: $(ARM)/%.c $(ARM)/include/arm64.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/virtio-mmio.o: $(ROOT)/src/hw/virtio-mmio.c \
+                         $(ARM)/include/arm64.h $(ARM)/include/virtio_adapter.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/virtio-ring.o: $(ROOT)/src/hw/virtio-ring.c \
+                         $(ROOT)/src/hw/virtio-ring.h \
+                         $(ARM)/include/virtio_adapter.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
@@ -56,6 +67,18 @@ $(OUT)/diagnostic-code.bin: $(OUT)/diagnostic-code.elf
 $(OUT)/diagnostic-payload.bin: $(OUT)/diagnostic-code.bin $(ARM)/tools/pack_payload.py
 	python3 $(ARM)/tools/pack_payload.py $< $@
 
+$(OUT)/linux-image-diagnostic.o: $(ARM)/tests/linux_image_diagnostic.S | $(OUT)
+	$(CLANG) --target=aarch64-none-elf -c $< -o $@
+
+$(OUT)/linux-image-diagnostic.elf: $(OUT)/linux-image-diagnostic.o
+	$(LLD) -Ttext=0x48080000 --entry=synthetic_image_start -o $@ $<
+
+$(OUT)/linux-image-diagnostic.bin: $(OUT)/linux-image-diagnostic.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(OUT)/linux-test-disk.img: $(OUT)/linux-image-diagnostic.bin $(ARM)/tools/create_linux_image_test_disk.py
+	python3 $(ARM)/tools/create_linux_image_test_disk.py $< $@
+
 run: all
 	$(QEMU) -machine virt -cpu cortex-a57 -m 256M -smp 1 -nographic \
 	    -bios $(OUT)/seabios-arm64.bin \
@@ -64,9 +87,14 @@ run: all
 test:
 	python3 $(ARM)/tests/test_fdt.py
 	python3 $(ARM)/tests/test_payload.py
+	python3 $(ARM)/tests/test_linuximage.py
+	python3 $(ARM)/tests/test_gptcrc.py
 
 qemu-test: all
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu.py
+
+qemu-disk-test: all $(OUT)/linux-test-disk.img
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_disk.py
 
 clean:
 	rm -rf $(OUT)

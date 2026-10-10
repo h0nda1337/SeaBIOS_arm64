@@ -66,8 +66,9 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 phase 1 v0.3-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 phase 2 v0.4-dev (AArch64/QEMU virt)\n");
     arm64_report_cpu();
+    arm64_timer_init();
     struct fdt_info info;
     int status = fdt_probe(dtb, &info);
     if (status != 0) {
@@ -119,6 +120,8 @@ void boot_main(void *dtb)
         uart_puts("[arm64] no fw_cfg node in Device Tree\n");
     }
     arm64_virtio_discover(&info);
+    arm64_disk_probe();
+    arm64_linux_discover(dtb);
     struct diagnostic_context context = { .info = &info, .dtb = dtb };
     struct arm64_boot_target diagnostic = {
         .priority = 10,

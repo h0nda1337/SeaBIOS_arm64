@@ -2,60 +2,17 @@
 #define _VIRTIO_RING_H
 
 #include "types.h" // u64
+#if CONFIG_AARCH64
+#include <stdint.h>
+#define PAGE_SIZE 4096
+#else
 #include "memmap.h" // PAGE_SIZE
+#endif
 
-/* Status byte for guest to report progress, and synchronize features. */
-/* We have seen device and processed generic fields (VIRTIO_CONFIG_F_VIRTIO) */
-#define VIRTIO_CONFIG_S_ACKNOWLEDGE     1
-/* We have found a driver for the device. */
-#define VIRTIO_CONFIG_S_DRIVER          2
-/* Driver has used its parts of the config, and is happy */
-#define VIRTIO_CONFIG_S_DRIVER_OK       4
-/* Driver has finished configuring features */
-#define VIRTIO_CONFIG_S_FEATURES_OK     8
-/* We've given up on this device. */
-#define VIRTIO_CONFIG_S_FAILED          0x80
+/* Architecture-neutral definitions shared with the AArch64 port. */
+#include "virtio-ring-common.h"
 
-/* v1.0 compliant. */
-#define VIRTIO_F_VERSION_1              32
-#define VIRTIO_F_IOMMU_PLATFORM         33
-
-#define MAX_QUEUE_NUM      (256)
-
-#define VRING_DESC_F_NEXT  1
-#define VRING_DESC_F_WRITE 2
-
-#define VRING_AVAIL_F_NO_INTERRUPT 1
-
-#define VRING_USED_F_NO_NOTIFY     1
-
-struct vring_desc
-{
-   u64 addr;
-   u32 len;
-   u16 flags;
-   u16 next;
-};
-
-struct vring_avail
-{
-   u16 flags;
-   u16 idx;
-   u16 ring[0];
-};
-
-struct vring_used_elem
-{
-   u32 id;
-   u32 len;
-};
-
-struct vring_used
-{
-   u16 flags;
-   u16 idx;
-   struct vring_used_elem ring[];
-};
+#define MAX_QUEUE_NUM (256)
 
 struct vring {
    unsigned int num;
@@ -94,16 +51,24 @@ vring_init(struct vring *vr, unsigned int num, unsigned char *queue)
    vr->num = num;
 
    /* physical address of desc must be page aligned */
+#if CONFIG_AARCH64
+   vr->desc = (void*)ALIGN((uintptr_t)queue, PAGE_SIZE);
+#else
    vr->desc = (void*)ALIGN((u32)queue, PAGE_SIZE);
+#endif
 
    vr->avail = (struct vring_avail *)&vr->desc[num];
    /* disable interrupts */
    vr->avail->flags |= VRING_AVAIL_F_NO_INTERRUPT;
 
    /* physical address of used must be page aligned */
+#if CONFIG_AARCH64
+   vr->used = (void*)ALIGN((uintptr_t)&vr->avail->ring[num], PAGE_SIZE);
+#else
    vr->used = (void*)ALIGN((u32)&vr->avail->ring[num], PAGE_SIZE);
+#endif
 
-   int i;
+   unsigned int i;
    for (i = 0; i < num - 1; i++)
        vr->desc[i].next = i + 1;
    vr->desc[i].next = 0;
