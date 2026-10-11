@@ -26,6 +26,7 @@ def build():
     p.add_argument('--image', type=Path, default=Path(os.environ.get('ARM64_REAL_LINUX_IMAGE','/nonexistent/linux/Image')))
     p.add_argument('--timeout', type=int, default=95)
     p.add_argument('--modern-virtio', action='store_true')
+    p.add_argument('--fat32', action='store_true', help='load /BOOT/IMAGE from active-MBR FAT32')
     p.add_argument('--secondary-disk', action='store_true',
                    help='boot Linux from disk1 while disk0 is unbootable')
     p.add_argument('--log', type=Path)
@@ -45,7 +46,9 @@ def build():
                         '-o',str(init),str(ROOT/'tests/linux_init.S')],check=True)
         subprocess.run([sys.executable,str(ROOT/'tools/create_initramfs.py'),
                         str(init),str(archive)],check=True)
-        subprocess.run([sys.executable,str(ROOT/'tools/create_real_linux_disk.py'),
+        builder = ('create_fat32_linux_disk.py' if a.fat32 else
+                   'create_real_linux_disk.py')
+        subprocess.run([sys.executable,str(ROOT/'tools'/builder),
                         str(a.image),str(disk),'--initrd',str(archive)],check=True)
         cmd=[qemu]
         if os.environ.get('QEMU_ROM_DIR'):
@@ -103,6 +106,8 @@ def build():
         raise SystemExit('FAIL: real Linux AArch64 did NOT reach /init')
     if 'Linux version' not in log:
         raise SystemExit('FAIL: no evidence of Linux kernel initialization')
+    if a.fat32 and '[linux] FAT32 /BOOT/IMAGE loaded' not in log:
+        raise SystemExit('FAIL: FAT32 file loader not used')
     if a.secondary_disk and '[boot] Linux drive index 1' not in log:
         raise SystemExit('FAIL: Linux was not loaded from the second disk')
     print('PASS: real Linux ARM64 booted from the firmware via legacy MBR and reached /init',flush=True)

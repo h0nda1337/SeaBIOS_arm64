@@ -19,9 +19,9 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
         $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/blockgeom.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
-        $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
+        $(OUT)/fdt_boot.o $(OUT)/fat32.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-multiboot-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
+.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-multiboot-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test qemu-fat-linux-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -168,3 +168,7 @@ qemu-real-linux-test: all
 # Phase 10: independent disk selection, native MBR/FAT32 stage2 and fw_cfg bootindex.
 qemu-multiboot-test: all $(OUT)/legacy-stage.bin $(OUT)/linux-image-diagnostic.bin
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_multiboot.py
+
+# v1.4: FAT32 file-based Linux Image on active MBR (no UEFI).
+qemu-fat-linux-test: all $(OUT)/linux-image-diagnostic.bin
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_fat_linux.py

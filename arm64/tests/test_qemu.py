@@ -17,12 +17,12 @@ base = [qemu, *(['-L', os.environ['QEMU_ROM_DIR']] if os.environ.get('QEMU_ROM_D
         '-bios', str(ROOT / 'out' / 'seabios-arm64.bin')]
 
 for name, suffix, expected in [
-    ('no payload', [], ['SeaBIOS-ARM64 legacy MBR v1.3-dev', 'Device Tree bytes',
+    ('no payload', [], ['SeaBIOS-ARM64 legacy MBR v1.4-dev', 'Device Tree bytes',
                         '[boot] not found', 'halt (WFE)']),
     ('with diagnostic payload', [
         '-device', 'loader,file=' + str(ROOT / 'out' / 'diagnostic-payload.bin')
         + ',addr=0x48000000'],
-        ['SeaBIOS-ARM64 legacy MBR v1.3-dev', 'Device Tree bytes',
+        ['SeaBIOS-ARM64 legacy MBR v1.4-dev', 'Device Tree bytes',
          'valid diagnostic payload', 'CHAINLOAD OK'])
 ]:
     proc = subprocess.Popen(base + suffix, stdout=subprocess.PIPE,

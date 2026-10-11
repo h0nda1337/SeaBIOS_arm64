@@ -4,6 +4,7 @@
 #include "include/bootorder.h"
 #include "include/gpt.h"
 #include "include/fdt_boot.h"
+#include "include/fat32.h"
 
 /* A minimal direct Linux Image handoff from a raw MBR/GPT Linux partition.
  * This deliberately omits filesystems, EFI, initrd, DTB relocation and
@@ -24,8 +25,18 @@ struct linux_candidate {
     uint64_t initrd_sector, initrd_sector_count;
     struct arm64_linux_image header;
     void *dtb;
+    /* Optional filesystem-backed Linux boot candidate (MBR FAT32). */
+    uint8_t from_fat32;
+    struct fat32_volume fat_volume;
+    uint32_t kernel_cluster, kernel_file_bytes;
+    uint32_t initrd_cluster, initrd_file_bytes;
 };
 static struct linux_candidate LinuxCandidates[ARM64_MAX_BLOCK_DRIVES];
+static struct linux_candidate FatCandidates[ARM64_MAX_BLOCK_DRIVES];
+/* Only one boot attempt runs at once; this FAT cache is reset per candidate. */
+static struct fat32_context LinuxFat;
+#define LINUX_FAT_IMAGE_NAME "IMAGE      "
+#define LINUX_FAT_INITRD_NAME "INITRD  IMG"
 
 static uint32_t u32le(const uint8_t *p)
 {
@@ -55,55 +66,82 @@ static int boot_linux_image(void *context)
     uart_hex(size);
     uart_newline();
     unsigned char *dst = (unsigned char *)(uintptr_t)dest;
-    for (uint64_t block = 0; block < blocks;) {
-        uint64_t remain = blocks - block;
-        uint32_t count = (uint32_t)(remain < 16u ? remain : 16u);
-        if (arm64_virtio_blk_read_many_at(candidate->drive_index,
-                                       candidate->first_sector + block,
-                                       ReadBatch, count)) {
-            uart_puts("[linux] disk read error, refusing boot\n");
+    if (candidate->from_fat32) {
+        LinuxFat.volume = candidate->fat_volume;
+        LinuxFat.disk_index = candidate->drive_index;
+        LinuxFat.cache_lba = UINT64_MAX;
+        if (arm64_fat32_load(&LinuxFat, candidate->kernel_cluster,
+                             candidate->kernel_file_bytes, dst,
+                             (uint32_t)size)) {
+            uart_puts("[linux] FAT32 kernel chain invalid or truncated\n");
             return -2;
         }
-        uint64_t left = size - block * SECTOR_BYTES;
-        size_t chunk = left < SECTOR_BYTES * count ? (size_t)left :
-                       SECTOR_BYTES * count;
-        for (size_t i = 0; i < chunk; ++i)
-            dst[block * SECTOR_BYTES + i] = ReadBatch[i];
-        block += count;
+        /* The Linux Image header may include a BSS tail in image_size.
+         * This is memory-backed and zero-filled, not disk-backed. */
+        for (uint64_t i = candidate->kernel_file_bytes; i < size; ++i)
+            dst[i] = 0;
+        uart_puts("[linux] FAT32 /BOOT/IMAGE loaded on disk ");
+        uart_dec(candidate->drive_index); uart_newline();
+    } else {
+        for (uint64_t block = 0; block < blocks;) {
+            uint64_t remain = blocks - block;
+            uint32_t count = (uint32_t)(remain < 16u ? remain : 16u);
+            if (arm64_virtio_blk_read_many_at(candidate->drive_index,
+                                           candidate->first_sector + block,
+                                           ReadBatch, count)) {
+                uart_puts("[linux] disk read error, refusing boot\n");
+                return -2;
+            }
+            uint64_t left = size - block * SECTOR_BYTES;
+            size_t chunk = left < SECTOR_BYTES * count ? (size_t)left :
+                           SECTOR_BYTES * count;
+            for (size_t i = 0; i < chunk; ++i)
+                dst[block * SECTOR_BYTES + i] = ReadBatch[i];
+            block += count;
+        }
     }
     /* Kernel bytes written by the bootloader must reach PoC before execute. */
     arm64_cache_clean_range(dst, size);
 
     uint64_t initrd_base = 0, initrd_end = 0;
-    if (candidate->initrd_sector_count) {
-        const uint64_t nbytes = candidate->initrd_sector_count * SECTOR_BYTES;
-        /* Round the placement AFTER the loaded kernel, preventing overlap
-         * even when the Image carries a large text_offset or padding. */
+    if (candidate->initrd_sector_count || candidate->initrd_file_bytes) {
+        uint64_t nbytes = candidate->from_fat32
+            ? candidate->initrd_file_bytes
+            : candidate->initrd_sector_count * SECTOR_BYTES;
         if (dest + size > UINT64_MAX - UINT64_C(0x1fffff))
             return -4;
         initrd_base = (dest + size + UINT64_C(0x1fffff)) &
                       ~UINT64_C(0x1fffff);
         if (!arm64_post_can_load(initrd_base, nbytes)) {
-            uart_puts("[initrd] no safe RAM for raw initrd\n");
+            uart_puts("[initrd] no safe RAM for initrd\n");
             return -5;
         }
         unsigned char *initrd = (unsigned char *)(uintptr_t)initrd_base;
-        for (uint64_t block = 0; block < candidate->initrd_sector_count;) {
-            uint32_t count = (uint32_t)(candidate->initrd_sector_count - block < 16u ?
-                             candidate->initrd_sector_count - block : 16u);
-            if (arm64_virtio_blk_read_many_at(candidate->drive_index,
-                                           candidate->initrd_sector + block,
-                                           ReadBatch, count)) {
-                uart_puts("[initrd] raw disk read failed\n");
+        if (candidate->from_fat32) {
+            if (arm64_fat32_load(&LinuxFat, candidate->initrd_cluster,
+                                 candidate->initrd_file_bytes, initrd,
+                                 (uint32_t)nbytes)) {
+                uart_puts("[initrd] FAT32 chain invalid\n");
                 return -6;
             }
-            for (uint32_t i = 0; i < count * SECTOR_BYTES; ++i)
-                initrd[block * SECTOR_BYTES + i] = ReadBatch[i];
-            block += count;
+        } else {
+            for (uint64_t block = 0; block < candidate->initrd_sector_count;) {
+                uint32_t count = (uint32_t)(candidate->initrd_sector_count - block < 16u ?
+                                 candidate->initrd_sector_count - block : 16u);
+                if (arm64_virtio_blk_read_many_at(candidate->drive_index,
+                                               candidate->initrd_sector + block,
+                                               ReadBatch, count)) {
+                    uart_puts("[initrd] raw disk read failed\n");
+                    return -6;
+                }
+                for (uint32_t i = 0; i < count * SECTOR_BYTES; ++i)
+                    initrd[block * SECTOR_BYTES + i] = ReadBatch[i];
+                block += count;
+            }
         }
         arm64_cache_clean_range(initrd, nbytes);
         initrd_end = initrd_base + nbytes;
-        uart_puts("[initrd] raw partition loaded at ");
+        uart_puts("[initrd] loaded at ");
         uart_hex(initrd_base);
         uart_puts(" / bytes ");
         uart_hex(nbytes);
@@ -132,8 +170,62 @@ static int boot_linux_image(void *context)
     arm64_handoff((void *)(uintptr_t)dest, (void *)new_dtb);
 }
 
+/* Independent boot candidates: an active FAT32 MBR volume containing
+ * /BOOT/IMAGE and optional /BOOT/INITRD.IMG. The x86 MBR/VBR code is not
+ * executed: this is the native AArch64 counterpart using SeaBIOS disk_op_s. */
+static void arm64_linux_fat_discover(void *dtb, uint32_t disk)
+{
+    if (arm64_fat32_probe_active(&LinuxFat, disk)) return;
+    uint32_t boot = 0, ignored = 0;
+    if (arm64_fat32_find(&LinuxFat, LinuxFat.volume.root_cluster,
+                         "BOOT       ", 1, &boot, &ignored)) return;
+    uint32_t cluster = 0, file_bytes = 0;
+    if (arm64_fat32_find(&LinuxFat, boot, LINUX_FAT_IMAGE_NAME, 0,
+                         &cluster, &file_bytes)) return;
+    if (file_bytes < SECTOR_BYTES || file_bytes > 64u * 1024u * 1024u ||
+        arm64_fat32_first_sector(&LinuxFat, cluster, Sector)) return;
+    struct arm64_linux_image header;
+    /* Allow a file smaller than image_size only when it has a valid Image
+     * header; the remaining memory is zero-filled before handoff. */
+    if (arm64_linux_image_parse(Sector, 64u * 1024u * 1024u / SECTOR_BYTES,
+                                &header) || header.image_size < file_bytes)
+        return;
+    uint32_t initrd_cluster = 0, initrd_bytes = 0;
+    if (!arm64_fat32_find(&LinuxFat, boot, LINUX_FAT_INITRD_NAME, 0,
+                          &initrd_cluster, &initrd_bytes)) {
+        if (!initrd_bytes || initrd_bytes > MAX_INITRD_BYTES) {
+            uart_puts("[linux] FAT32 initrd size rejected\n");
+            return;
+        }
+    } else {
+        initrd_cluster = 0;
+        initrd_bytes = 0;
+    }
+    struct linux_candidate *candidate = &FatCandidates[disk];
+    candidate->drive_index = disk;
+    candidate->from_fat32 = 1;
+    candidate->fat_volume = LinuxFat.volume;
+    candidate->kernel_cluster = cluster;
+    candidate->kernel_file_bytes = file_bytes;
+    candidate->initrd_cluster = initrd_cluster;
+    candidate->initrd_file_bytes = initrd_bytes;
+    candidate->header = header;
+    candidate->dtb = dtb;
+    candidate->target.priority = 5;
+    candidate->target.name = "FAT32 /BOOT/IMAGE Linux AArch64 on VirtIO";
+    candidate->target.attempt = boot_linux_image;
+    candidate->target.context = candidate;
+    candidate->target.firmware_path = arm64_boot_disk_path(disk);
+    arm64_boot_register(&candidate->target);
+    uart_puts("[linux] FAT32 /BOOT/IMAGE candidate on disk ");
+    uart_dec(disk); uart_newline();
+}
+
 void arm64_linux_discover(void *dtb)
 {
+    for (uint32_t disk = 0; disk < arm64_virtio_blk_count() &&
+                            disk < ARM64_MAX_BLOCK_DRIVES; ++disk)
+        arm64_linux_fat_discover(dtb, disk);
     for (uint32_t disk = 0; disk < arm64_virtio_blk_count() &&
                             disk < ARM64_MAX_BLOCK_DRIVES; ++disk) {
         const uint64_t disk_sectors = arm64_virtio_blk_capacity_at(disk);
