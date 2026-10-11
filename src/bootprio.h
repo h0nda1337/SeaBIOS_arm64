@@ -12,4 +12,17 @@ char *bootprio_glob_prefix(const char *glob, const char *str);
 // Returns -1 if there is no match or if the file is too large/malformed.
 int bootprio_find_text(const char *glob, const char *data, unsigned length);
 
+/* Upstream src/boot.c bootentry_add() sort policy, shared with ARM64.
+ * Device ordering applies only to floppy/HD/CD types (1..3).
+ * Return 1 iff incoming should appear BEFORE existing (stable on ties).
+ */
+struct bootprio_key {
+    int priority;
+    int type;
+    unsigned int drive_type;
+    unsigned int controller_id;
+};
+int bootprio_precedes(const struct bootprio_key *incoming,
+                      const struct bootprio_key *existing);
+
 #endif

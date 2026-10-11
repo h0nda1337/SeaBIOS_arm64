@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
-/* Fixed-base, import-free native PE32+ ARM64 staging experiment. NO EFI. */
+/* Import-free, relocatable native PE32+ ARM64 stage loader. NO EFI. */
 #include "include/arm64.h"
 #include "include/pe_legacy.h"
 #define MAX_PE_BYTES (4u * 1024u * 1024u)
 #define IMAGE_FILE_MACHINE_ARM64 0xaa64u
 #define IMAGE_SUBSYSTEM_NATIVE 1u
 #define IMAGE_SCN_MEM_EXECUTE 0x20000000u
+#define IMAGE_REL_BASED_ABSOLUTE 0u
+#define IMAGE_REL_BASED_DIR64 10u
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
 static uint32_t le32(const uint8_t *p)
 {
@@ -20,6 +22,57 @@ static int bounds(uint32_t at, uint32_t amount, uint32_t size)
 {
     return at <= size && amount <= size - at;
 }
+static void wr64(uint8_t *p, uint64_t n)
+{
+    for (unsigned i = 0; i < 8; ++i) {
+        p[i] = (uint8_t)(n & 0xffu);
+        n >>= 8;
+    }
+}
+
+/* PE base relocation blocks: IMAGE_BASE_RELOCATION + 16-bit type/offsets.
+ * Only the architecture-independent DIR64 relocation supported on ARM64 is
+ * understood. Never apply an unknown relocation type to executable memory.
+ * This loader intentionally does not resolve imports or establish a Windows
+ * process environment. A relocatable native PE is NOT a Windows loader. */
+static int apply_dir64_relocations(uint8_t *image, uint32_t image_size,
+                                   uint32_t rva, uint32_t bytes,
+                                   uint64_t preferred_base)
+{
+    if (!bytes) return preferred_base == PE_LEGACY_BASE ? 0 : -1;
+    if (!bounds(rva, bytes, image_size)) return -2;
+    uint32_t offset = 0;
+    uint32_t patches = 0;
+    while (offset < bytes) {
+        if (bytes - offset < 8u) return -3;
+        const uint8_t *block = image + rva + offset;
+        uint32_t page = le32(block);
+        uint32_t len = le32(block + 4);
+        if (len < 8u || len > bytes - offset || (len & 1u) ||
+            (page & 4095u)) return -4;
+        for (uint32_t i = 8; i < len; i += 2) {
+            uint32_t reloc = le16(block + i);
+            uint32_t type = reloc >> 12;
+            if (type == IMAGE_REL_BASED_ABSOLUTE) continue;
+            if (type != IMAGE_REL_BASED_DIR64) return -5;
+            uint32_t intra = reloc & 0xfffu;
+            if (page > image_size || intra > image_size - page ||
+                !bounds(page + intra, 8u, image_size) ||
+                ((page + intra) & 7u)) return -6;
+            uint8_t *target = image + page + intra;
+            uint64_t value = le64(target);
+            /* Avoid wrapping arbitrary pointers. This stage loader only
+             * relocates pointers INTO the image, not Windows imports. */
+            if (value < preferred_base ||
+                value - preferred_base >= image_size) return -7;
+            wr64(target, PE_LEGACY_BASE + (value - preferred_base));
+            if (++patches > (MAX_PE_BYTES / 8u)) return -8;
+        }
+        offset += len;
+    }
+    return preferred_base == PE_LEGACY_BASE || patches ? 0 : -9;
+}
+
 
 int arm64_pe_legacy_map(const uint8_t *file, uint32_t size,
                         uint64_t *entry, uint32_t *mapped_size)
@@ -42,14 +95,16 @@ int arm64_pe_legacy_map(const uint8_t *file, uint32_t size,
     uint32_t entry_rva = le32(opt + 16), sec_align = le32(opt + 32);
     uint32_t image_size = le32(opt + 56), hdr_size = le32(opt + 60);
     uint32_t dirs = le32(opt + 108);
-    if (le64(opt + 24) != PE_LEGACY_BASE || sec_align < 512 ||
+    uint64_t image_base = le64(opt + 24);
+    if (!image_base || image_base > UINT64_MAX - image_size ||
+        sec_align < 512 ||
         (sec_align & (sec_align - 1u)) || image_size < 4096 ||
         image_size > MAX_PE_BYTES || hdr_size > size || hdr_size > image_size ||
         entry_rva >= image_size || !arm64_post_can_load(PE_LEGACY_BASE, image_size))
         return -5;
     /* No import resolver, relocation engine, delay imports, TLS callbacks,
      * or managed runtime. Deliberately reject these, never branch blindly. */
-    const uint8_t dirs_to_reject[] = {1, 5, 9, 13, 14};
+    const uint8_t dirs_to_reject[] = {1, 9, 13, 14};
     for (unsigned i = 0; i < sizeof(dirs_to_reject); ++i) {
         uint32_t d = dirs_to_reject[i];
         if (dirs > d) {
@@ -57,6 +112,19 @@ int arm64_pe_legacy_map(const uint8_t *file, uint32_t size,
             if (le32(opt + 112 + 8*d) || le32(opt + 116 + 8*d)) return -7;
         }
     }
+    /* IMAGE_DIRECTORY_ENTRY_BASERELOC (5). Require both fields together.
+     * Reject a moved image without relocations rather than launching it at
+     * the wrong address; accept fixed-base native images as before. */
+    uint32_t reloc_rva = 0, reloc_size = 0;
+    if (dirs > 5u) {
+        if (optsize < 112u + 8u * 6u) return -6;
+        reloc_rva = le32(opt + 112 + 8 * 5);
+        reloc_size = le32(opt + 116 + 8 * 5);
+    }
+    if (!!reloc_rva != !!reloc_size ||
+        (image_base != PE_LEGACY_BASE && !reloc_size) ||
+        (reloc_size && !bounds(reloc_rva, reloc_size, image_size)))
+        return -12;
     uint32_t sections = peoff + 24 + optsize;
     if (!bounds(sections, nsec * 40, size) ||
         !bounds(sections, nsec * 40, hdr_size)) return -8;
@@ -93,6 +161,8 @@ int arm64_pe_legacy_map(const uint8_t *file, uint32_t size,
         for (uint32_t i = 0; i < le32(sec + 16); ++i)
             image[dest + i] = file[src + i];
     }
+    if (apply_dir64_relocations(image, image_size, reloc_rva,
+                                reloc_size, image_base)) return -13;
     *entry = PE_LEGACY_BASE + entry_rva;
     *mapped_size = image_size;
     return 0;

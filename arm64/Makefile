@@ -21,7 +21,7 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test
+.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -102,6 +102,13 @@ $(OUT)/legacy-pe-stage.exe: $(OUT)/legacy-pe-stage.obj
 	lld-link /machine:arm64 /subsystem:native /entry:pe_native_start \
 	    /base:0x4a000000 /nodefaultlib /opt:ref /out:$@ $<
 
+$(OUT)/legacy-pe-reloc-stage.obj: $(ARM)/tests/legacy_pe_reloc_stage.S | $(OUT)
+	$(CLANG) --target=aarch64-pc-windows-msvc -c $< -o $@
+
+$(OUT)/legacy-pe-reloc-stage.exe: $(OUT)/legacy-pe-reloc-stage.obj
+	lld-link /machine:arm64 /subsystem:native /entry:pe_native_reloc_start \
+	    /base:0x4b000000 /dynamicbase /fixed:no /nodefaultlib /opt:ref /out:$@ $<
+
 $(OUT)/legacy-mbr-test-disk.img: $(OUT)/legacy-stage.bin $(ARM)/tools/create_legacy_mbr_disk.py
 	python3 $(ARM)/tools/create_legacy_mbr_disk.py $< $@
 
@@ -110,6 +117,9 @@ qemu-bootorder-test: all $(OUT)/legacy-mbr-test-disk.img
 
 qemu-legacy-test: all $(OUT)/legacy-mbr-test-disk.img $(OUT)/legacy-pe-stage.exe
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_legacy.py
+
+qemu-reloc-test: all $(OUT)/legacy-pe-reloc-stage.exe
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_reloc.py
 
 run: all
 	$(QEMU) -machine virt -cpu cortex-a57 -m 256M -smp 1 -nographic \

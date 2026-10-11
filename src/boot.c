@@ -523,18 +523,21 @@ bootentry_add(int type, int prio, u32 data, const char *desc)
     struct hlist_node **pprev;
     struct bootentry_s *pos;
     hlist_for_each_entry_pprev(pos, pprev, &BootList, node) {
-        if (be->priority < pos->priority)
-            break;
-        if (be->priority > pos->priority)
-            continue;
-        if (be->type < pos->type)
-            break;
-        if (be->type > pos->type)
-            continue;
-        if (be->type <= IPL_TYPE_CDROM
-            && (be->drive->type < pos->drive->type
-                || (be->drive->type == pos->drive->type
-                    && be->drive->cntl_id < pos->drive->cntl_id)))
+        struct bootprio_key incoming = {
+            .priority = be->priority, .type = be->type,
+        };
+        struct bootprio_key existing = {
+            .priority = pos->priority, .type = pos->type,
+        };
+        if (be->type <= IPL_TYPE_CDROM) {
+            incoming.drive_type = be->drive->type;
+            incoming.controller_id = be->drive->cntl_id;
+        }
+        if (pos->type <= IPL_TYPE_CDROM) {
+            existing.drive_type = pos->drive->type;
+            existing.controller_id = pos->drive->cntl_id;
+        }
+        if (bootprio_precedes(&incoming, &existing))
             break;
     }
     hlist_add(&be->node, pprev);

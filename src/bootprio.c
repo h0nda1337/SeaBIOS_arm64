@@ -65,3 +65,21 @@ bootprio_find_text(const char *glob, const char *data, unsigned length)
     }
     return -1;
 }
+
+/* Factored from the sorted BootList insertion in upstream src/boot.c.
+ * Keep identical priorities stable; x86 drive type/controller sorting wins
+ * on ties, as in SeaBIOS's long-standing IPL implementation. */
+int
+bootprio_precedes(const struct bootprio_key *a, const struct bootprio_key *b)
+{
+    if (a->priority != b->priority)
+        return a->priority < b->priority;
+    if (a->type != b->type)
+        return a->type < b->type;
+    if (a->type >= 1 && a->type <= 3) {
+        if (a->drive_type != b->drive_type)
+            return a->drive_type < b->drive_type;
+        return a->controller_id < b->controller_id;
+    }
+    return 0;
+}

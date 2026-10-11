@@ -48,7 +48,33 @@ def main():
             actual = lib.bootprio_find_text(glob, data, len(data))
             assert actual == expected, (glob, expected, actual)
             count += 1
-        print(f'PASS: {count}/{count} original SeaBIOS SHA-256 / bootorder host cases')
+        # These comparisons mirror upstream SeaBIOS's x86 IPL BootList:
+        #  priority, device class and (for disks) controller identity.
+        class BootKey(ctypes.Structure):
+            _fields_ = [('priority', ctypes.c_int), ('type', ctypes.c_int),
+                        ('drive_type', ctypes.c_uint), ('controller_id', ctypes.c_uint)]
+        lib.bootprio_precedes.argtypes = (ctypes.POINTER(BootKey), ctypes.POINTER(BootKey))
+        lib.bootprio_precedes.restype = ctypes.c_int
+        testcases = [
+            ((1, 2, 0, 0), (2, 1, 0, 0), True),
+            ((3, 2, 0, 0), (2, 3, 0, 0), False),
+            ((2, 1, 0, 0), (2, 2, 0, 0), True),
+            ((2, 3, 0, 0), (2, 2, 0, 0), False),
+            ((2, 2, 1, 0), (2, 2, 2, 0), True),
+            ((2, 2, 2, 0), (2, 2, 1, 0), False),
+            ((2, 2, 2, 5), (2, 2, 2, 6), True),
+            ((2, 2, 2, 6), (2, 2, 2, 5), False),
+            ((2, 2, 2, 5), (2, 2, 2, 5), False),
+            ((2, 128, 0, 0), (2, 128, 0, 0), False),
+            ((2, 128, 3, 4), (2, 128, 5, 1), False),
+            ((-1, 2, 0, 0), (0, 2, 0, 0), True),
+        ]
+        for before, after, expected in testcases:
+            result = bool(lib.bootprio_precedes(ctypes.byref(BootKey(*before)),
+                                                ctypes.byref(BootKey(*after))))
+            assert result == expected, (before, after, expected, result)
+            count += 1
+        print(f'PASS: {count}/{count} original SeaBIOS shared-core host cases')
 
 if __name__ == '__main__':
     main()

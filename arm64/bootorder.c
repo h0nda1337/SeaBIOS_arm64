@@ -61,7 +61,17 @@ void arm64_boot_register(struct arm64_boot_target *target)
     while (*link) {
         struct arm64_boot_target *current =
             container_of(*link, struct arm64_boot_target, link);
-        if (target->priority < current->priority)
+        /* SeaBIOS x86's actual IPL sorting policy. Disk-like options
+         * precede non-disk diagnostic options when priorities tie. */
+        struct bootprio_key incoming = {
+            .priority = target->priority,
+            .type = target->firmware_path ? 2 : 0x80,
+        };
+        struct bootprio_key existing = {
+            .priority = current->priority,
+            .type = current->firmware_path ? 2 : 0x80,
+        };
+        if (bootprio_precedes(&incoming, &existing))
             break;
         link = &(*link)->next;
     }

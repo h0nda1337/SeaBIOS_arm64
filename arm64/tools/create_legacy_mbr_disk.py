@@ -21,6 +21,7 @@ p.add_argument('--bad-pe-base', action='store_true')
 p.add_argument('--bad-pe-entry', action='store_true')
 p.add_argument('--bad-pe-import', action='store_true')
 p.add_argument('--bad-pe-section', action='store_true')
+p.add_argument('--bad-pe-reloc', action='store_true')
 p.add_argument('--bad-mbr', action='store_true')
 p.add_argument('--bad-bpb', action='store_true')
 p.add_argument('--bad-checksum', action='store_true')
@@ -56,10 +57,23 @@ if a.pe:
         struct.pack_into('<I', filedata, opt + 16, 0x100000)
     if a.bad_pe_import:
         struct.pack_into('<II', filedata, opt + 112 + 8, 0x1000, 16)
+    if a.bad_pe_reloc:
+        directory = opt + 112 + 5 * 8
+        reloc_rva, reloc_bytes = struct.unpack_from('<II', filedata, directory)
+        assert reloc_rva and reloc_bytes >= 10
+        secpos = opt + struct.unpack_from('<H', filedata, peoffset + 20)[0]
+        nsec = struct.unpack_from('<H', filedata, peoffset + 6)[0]
+        secdata = [struct.unpack_from('<IIII', filedata, secpos + 40*i + 8)
+                   for i in range(nsec)]
+        section = next((z for z in secdata
+                        if z[1] <= reloc_rva < z[1] + max(z[0], z[2])), None)
+        assert section is not None
+        offset = section[3] + reloc_rva - section[1]
+        struct.pack_into('<H', filedata, offset + 8, 0x2000 | (struct.unpack_from('<H', filedata, offset+8)[0] & 0xfff))
     if a.bad_pe_section:
         first_section = opt + struct.unpack_from('<H', filedata, peoffset + 20)[0]
         struct.pack_into('<I', filedata, first_section + 20, len(filedata) + 0x200)
-assert len(filedata) <= 1536
+assert len(filedata) <= 16 * 1024
 
 START = 2048
 TOTAL = 80000
@@ -68,7 +82,9 @@ RESERVED = 32
 DATA = RESERVED + FATSECTORS
 ROOT = 2
 BOOT = 3
-FILE_CHAIN = [4, 6, 9]
+# The on-disk FAT chain is intentionally fragmented. Allow PE with a
+# .reloc section to exceed the historical three-cluster fixture size.
+FILE_CHAIN = [4, 6, 9] + list(range(10, 10 + max(0, (len(filedata) + 511)//512 - 3)))
 
 
 def wr(f, lba, data):
@@ -108,9 +124,13 @@ bpb[82:90] = b'FAT32   '
 bpb[510:512] = b'\x55\xaa'
 
 fat = bytearray(512)
-for cluster, value in [(0, 0x0ffffff8), (1, 0x0fffffff), (ROOT, 0x0fffffff),
-                       (BOOT, 0x0fffffff), (4, 0x0fffffff if a.short_cluster else 6),
-                       (6, 0x0fffffff if a.bad_chain else 9), (9, 0x0fffffff)]:
+for cluster, value in [(0, 0x0ffffff8), (1, 0x0fffffff),
+                       (ROOT, 0x0fffffff), (BOOT, 0x0fffffff)]:
+    struct.pack_into('<I', fat, cluster * 4, value)
+for i, cluster in enumerate(FILE_CHAIN):
+    value = FILE_CHAIN[i + 1] if i + 1 < len(FILE_CHAIN) else 0x0fffffff
+    if i == 0 and a.short_cluster: value = 0x0fffffff
+    if i == 1 and a.bad_chain: value = 0x0fffffff
     struct.pack_into('<I', fat, cluster * 4, value)
 root = bytearray(512)
 root[0:32] = dirent(b'BOOT       ', 0x10, BOOT, 0)

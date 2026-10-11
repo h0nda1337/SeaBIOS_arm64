@@ -1,11 +1,11 @@
-# SeaBIOS-ARM64 — estado experimental de v0.7
+# SeaBIOS-ARM64 — estado experimental de v0.8
 
 **Ruta MBR FAT32 AArch64 funcional en QEMU, sin UEFI. Windows ARM64 no arranca.**
 
 El firmware encuentra una partición MBR FAT32 activa en un disco VirtIO,
 localiza `BOOT/ARM64.BIN` o `BOOT/ARM64.EXE`, valida y carga una segunda
 etapa AArch64 y transfiere el control. También carga ejecutables PE32+ ARM64
-nativos **sin imports ni relocations**, creados para esta prueba; esto no
+nativos **sin imports y con reubicaciones DIR64 limitadas**, creados para esta prueba; esto no
 equivale al administrador de arranque de Microsoft.
 
 Se mantienen los subsistemas originales de SeaBIOS reutilizados desde
@@ -25,3 +25,13 @@ completa en [PHASE4_LEGACY_MBR.md](PHASE4_LEGACY_MBR.md).
   no autenticacion), manteniendo `SBARMLE1`
 
 **Windows ARM64 sigue sin arrancar. No existen servicios UEFI.**
+
+## Lo nuevo en v0.8
+
+- El criterio original de orden de arranque de SeaBIOS ahora se comparte entre
+  x86 y AArch64 (`src/bootprio.c`, llamado por `src/boot.c`)
+- Carga PE32+ ARM64 sin importaciones, admitiendo reubicaciones DIR64
+- Pruebas reales en QEMU con PE enlazado a una direccion distinta de carga
+- Rechazo probado de reubicaciones manipuladas en VirtIO v1 y v2
+
+**Esta fase NO arranca Windows ARM64. No implementa UEFI.**
