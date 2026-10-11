@@ -166,5 +166,5 @@ qemu-real-linux-test: all
 	    --image "$(ARM64_REAL_LINUX_IMAGE)"
 
 # Phase 10: independent disk selection, native MBR/FAT32 stage2 and fw_cfg bootindex.
-qemu-multiboot-test: all $(OUT)/legacy-stage.bin
+qemu-multiboot-test: all $(OUT)/legacy-stage.bin $(OUT)/linux-image-diagnostic.bin
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_multiboot.py
