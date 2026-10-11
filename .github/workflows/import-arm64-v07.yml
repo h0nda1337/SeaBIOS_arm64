@@ -1,0 +1,36 @@
+name: Publish experimental SeaBIOS ARM64 v0.7 sources
+on:
+  push:
+    branches:
+      - experimental/arm64-shared-core-v0.7
+    paths:
+      - bootstrap/ready.txt
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-shared-core-v0.7
+          fetch-depth: 0
+      - name: Verify and apply complete v0.6 to v0.7 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bootstrap/ready.txt
+          test "$(find bootstrap -name 'v07.part*' | wc -l)" -eq 5
+          cat bootstrap/v07.part* | base64 --decode > /tmp/arm64-v07.patch.xz
+          echo '72e487fe0f968586cd809c4da4c96e714f8478fa65b35c5167b8607edea8bae3  /tmp/arm64-v07.patch.xz' | sha256sum -c -
+          xz --test /tmp/arm64-v07.patch.xz
+          xz --decompress --stdout /tmp/arm64-v07.patch.xz > /tmp/arm64-v07.patch
+          git apply --check /tmp/arm64-v07.patch
+          git apply /tmp/arm64-v07.patch
+          rm -rf bootstrap
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(arm64): share SeaBIOS boot priorities and SHA-256 (v0.7)'
+          git push origin HEAD:experimental/arm64-shared-core-v0.7
