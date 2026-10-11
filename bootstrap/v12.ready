@@ -1,2 +1,3 @@
 SHA256 xz: 122551c8389b602b67a4c16a1746f481af5314ee9022a357afb3efb5d38a4598
 SHA256 patch: 804fe80b8ba36522c5d7dde2b8ff39a558a2a32a424a25781f3993f16933fcfa
+Retry import: preserve existing README revisions, source checksum unchanged.
