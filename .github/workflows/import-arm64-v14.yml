@@ -25,7 +25,7 @@ jobs:
           base64 -d bootstrap/v14.patch.xz.b64 | xz -d > /tmp/v14.patch
           git apply --check /tmp/v14.patch
           git apply /tmp/v14.patch
-          rm bootstrap/v14.patch.xz.b64
+          # Workflow files need a separately authorized GitHub write.\n          rm -f .github/workflows/arm64-v14-fat-linux.yml\n          rm bootstrap/v14.patch.xz.b64
           rmdir bootstrap || true
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
