@@ -14,7 +14,7 @@ CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -mgeneral-regs
 # incremental step toward shared subsystems; this is not the full POST port.
 CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src
 OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
-        $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
+        $(OUT)/post.o $(OUT)/postflow.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
         $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
@@ -41,6 +41,9 @@ $(OUT)/virtio-ring.o: $(ROOT)/src/hw/virtio-ring.c \
 
 $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
                     $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/postflow.o: $(ROOT)/src/postflow.c $(ROOT)/src/postflow.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/blockpolicy.o: $(ROOT)/src/blockpolicy.c $(ROOT)/src/blockpolicy.h $(ROOT)/src/block.h | $(OUT)
@@ -130,6 +133,7 @@ run: all
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_postflow.py
 	python3 $(ARM)/tests/test_blockpolicy.py
 	cd $(ROOT) && python3 -m unittest arm64.tests.test_real_linux_image -v
 	python3 $(ARM)/tests/test_shared_core.py

@@ -20,6 +20,7 @@
 #include "malloc.h" // malloc_init
 #include "memmap.h" // SYMBOL
 #include "output.h" // dprintf
+#include "postflow.h" // shared POST ordering
 #include "string.h" // memset
 #include "util.h" // kbd_init
 #include "tcgbios.h" // tpm_*
@@ -192,46 +193,63 @@ startBoot(void)
     call16_int(0x19, &br);
 }
 
-// Main setup code.
+// SeaBIOS x86 operations for the shared architecture-neutral POST sequence.
+// The ordering lives in src/postflow.c, but the PC BIOS mechanisms remain
+// here: IVT/BDA, PCI/PIC, VGA option ROM, and 16-bit INT19 never run on ARM64.
+static int
+x86_post_step(void *unused, enum postflow_stage stage)
+{
+    switch (stage) {
+    case POSTFLOW_INTERFACE:
+        interface_init();
+        break;
+    case POSTFLOW_PLATFORM:
+        platform_hardware_setup();
+        break;
+    case POSTFLOW_ASYNC_DEVICES:
+        if (threads_during_optionroms())
+            device_hardware_setup();
+        break;
+    case POSTFLOW_VIDEO:
+        vgarom_setup();
+        sercon_setup();
+        enable_vga_console();
+        break;
+    case POSTFLOW_SYNC_DEVICES:
+        if (!threads_during_optionroms()) {
+            device_hardware_setup();
+            wait_threads();
+        }
+        break;
+    case POSTFLOW_OPTIONROMS:
+        optionrom_setup();
+        break;
+    case POSTFLOW_BOOTMENU:
+        interactive_bootmenu();
+        wait_threads();
+        break;
+    case POSTFLOW_PREPARE:
+        prepareboot();
+        break;
+    case POSTFLOW_PROTECT:
+        make_bios_readonly();
+        break;
+    case POSTFLOW_BOOT:
+        startBoot();
+        break;
+    default:
+        return -1;
+    }
+    return 0;
+}
+
+// Main setup code. POST flow is now shared with the AArch64 build.
 static void
 maininit(void)
 {
-    // Initialize internal interfaces.
-    interface_init();
-
-    // Setup platform devices.
-    platform_hardware_setup();
-
-    // Start hardware initialization (if threads allowed during optionroms)
-    if (threads_during_optionroms())
-        device_hardware_setup();
-
-    // Run vga option rom
-    vgarom_setup();
-    sercon_setup();
-    enable_vga_console();
-
-    // Do hardware initialization (if running synchronously)
-    if (!threads_during_optionroms()) {
-        device_hardware_setup();
-        wait_threads();
-    }
-
-    // Run option roms
-    optionrom_setup();
-
-    // Allow user to modify overall boot order.
-    interactive_bootmenu();
-    wait_threads();
-
-    // Prepare for boot.
-    prepareboot();
-
-    // Write protect bios memory.
-    make_bios_readonly();
-
-    // Invoke int 19 to start boot process.
-    startBoot();
+    const struct postflow_ops ops = { .step = x86_post_step };
+    if (postflow_run(&ops, NULL, NULL))
+        panic("Invalid SeaBIOS POST sequence\n");
 }
 
 

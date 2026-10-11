@@ -2,6 +2,7 @@
 #include "include/arm64.h"
 #include "include/bootorder.h"
 #include "include/fwcfg.h"
+#include "../src/postflow.h"
 
 /* ARM64 staging firmware - not yet a UEFI or legacy BIOS implementation. */
 #define PAYLOAD_MAGIC "SBARMP01"
@@ -63,6 +64,89 @@ static int try_payload(void *context)
     arm64_handoff((void *)code, dtb);
 }
 
+struct arm64_post_context {
+    struct fdt_info *info;
+    void *dtb;
+    struct diagnostic_context *diagnostic;
+    struct arm64_boot_target diagnostic_target;
+};
+
+/* Architecture-specific POST operations. The order is defined by the
+ * genuine shared SeaBIOS src/postflow.c, not a second ARM-only scheduler. */
+static int arm64_post_step(void *opaque, enum postflow_stage stage)
+{
+    struct arm64_post_context *ctx = opaque;
+    struct fdt_info *info = ctx->info;
+    switch (stage) {
+    case POSTFLOW_INTERFACE:
+        if (arm64_post_memory(info, ctx->dtb))
+            return -1;
+        return 0;
+    case POSTFLOW_PLATFORM:
+        if (info->has_fwcfg) {
+            uart_puts("[arm64] QEMU fw_cfg MMIO: ");
+            uart_hex(info->fwcfg_base);
+            uart_newline();
+            int found = arm64_fwcfg_init(info->fwcfg_base);
+            if (found >= 0)
+                arm64_fwcfg_report();
+            else {
+                uart_puts("[arm64] fw_cfg initialization rejected: ");
+                uart_dec((uint32_t)(-found));
+                uart_newline();
+            }
+        } else {
+            uart_puts("[arm64] no fw_cfg node in Device Tree\n");
+        }
+        return 0;
+    case POSTFLOW_ASYNC_DEVICES:
+        /* No threaded device setup until the ARM IRQ/scheduler is ported. */
+        return 0;
+    case POSTFLOW_VIDEO:
+        /* No x86 VGA option ROMs on AArch64; PL011 was initialized early. */
+        return 0;
+    case POSTFLOW_SYNC_DEVICES: {
+        arm64_virtio_discover(info);
+        /* QEMU bootorder uses the exact VirtIO-MMIO legacy path format. */
+        static char boot_mmio_path[] = "/virtio-mmio@0000000000000000/*";
+        uintptr_t disk_mmio = arm64_virtio_blk_mmio();
+        if (disk_mmio) {
+            static const char hex[] = "0123456789abcdef";
+            for (int i = 0; i < 16; ++i)
+                boot_mmio_path[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
+            arm64_boot_set_disk_path(boot_mmio_path);
+        }
+        arm64_disk_probe();
+        arm64_legacy_discover(ctx->dtb);
+        arm64_linux_discover(ctx->dtb);
+        return 0;
+    }
+    case POSTFLOW_OPTIONROMS:
+        /* Native ARM64 legacy boot does not execute x86 PCI option ROMs. */
+        return 0;
+    case POSTFLOW_BOOTMENU:
+        ctx->diagnostic_target.priority = 10;
+        ctx->diagnostic_target.name = "AArch64 QEMU diagnostic payload";
+        ctx->diagnostic_target.attempt = try_payload;
+        ctx->diagnostic_target.context = ctx->diagnostic;
+        ctx->diagnostic_target.firmware_path = NULL;
+        arm64_boot_register(&ctx->diagnostic_target);
+        return 0;
+    case POSTFLOW_PREPARE:
+        /* Memory reservations checked by ARM64 loaders before handoff. */
+        return 0;
+    case POSTFLOW_PROTECT:
+        /* No flash protection, MMU or memory permissions provided yet. */
+        return 0;
+    case POSTFLOW_BOOT:
+        uart_puts("[post] shared SeaBIOS POST flow ready\n");
+        arm64_boot_execute();
+        return 0;
+    default:
+        return -1;
+    }
+}
+
 void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
@@ -100,49 +184,23 @@ void boot_main(void *dtb)
         uart_puts("[arm64] no RAM node found\n");
     }
 
-    /* Real shared SeaBIOS memory-map and ROM-file registries. */
-    if (arm64_post_memory(&info, dtb) != 0) {
-        uart_puts("[arm64] invalid memory layout; refusing handoff\n");
-        goto idle;
-    }
-    if (info.has_fwcfg) {
-        uart_puts("[arm64] QEMU fw_cfg MMIO: ");
-        uart_hex(info.fwcfg_base);
-        uart_newline();
-        int found = arm64_fwcfg_init(info.fwcfg_base);
-        if (found >= 0)
-            arm64_fwcfg_report();
-        else {
-            uart_puts("[arm64] fw_cfg initialization rejected: ");
-            uart_dec((uint32_t)(-found));
-            uart_newline();
-        }
-    } else {
-        uart_puts("[arm64] no fw_cfg node in Device Tree\n");
-    }
-    arm64_virtio_discover(&info);
-    /* SeaBIOS fw_cfg bootorder uses this exact legacy MMIO path format.
-     * Only the device-priority matcher is shared; no x86 BIOS ABI is used. */
-    static char BootMMIOPath[] = "/virtio-mmio@0000000000000000/*";
-    uintptr_t disk_mmio = arm64_virtio_blk_mmio();
-    if (disk_mmio) {
-        static const char hex[] = "0123456789abcdef";
-        for (int i = 0; i < 16; ++i)
-            BootMMIOPath[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
-        arm64_boot_set_disk_path(BootMMIOPath);
-    }
-    arm64_disk_probe();
-    arm64_legacy_discover(dtb);
-    arm64_linux_discover(dtb);
+    /* The shared postflow_run() sequence is also used by src/post.c on x86.
+     * The ARM64 callbacks deliberately skip x86-only stages. */
     struct diagnostic_context context = { .info = &info, .dtb = dtb };
-    struct arm64_boot_target diagnostic = {
-        .priority = 10,
-        .name = "AArch64 QEMU diagnostic payload",
-        .attempt = try_payload,
-        .context = &context,
+    struct arm64_post_context post_ctx = {
+        .info = &info, .dtb = dtb, .diagnostic = &context,
     };
-    arm64_boot_register(&diagnostic);
-    arm64_boot_execute();
+    const struct postflow_ops post_ops = { .step = arm64_post_step };
+    enum postflow_stage failed_stage;
+    status = postflow_run(&post_ops, &post_ctx, &failed_stage);
+    if (status) {
+        uart_puts("[post] shared POST stage failed: ");
+        uart_dec((uint32_t)failed_stage);
+        uart_puts(" status ");
+        uart_dec((uint32_t)(-status));
+        uart_newline();
+    }
+
 idle:
     uart_puts("[arm64] halt (WFE). Windows ARM64 legacy boot not implemented.\n");
     for (;;)
