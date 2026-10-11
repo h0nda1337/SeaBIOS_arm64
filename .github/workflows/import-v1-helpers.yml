@@ -1,0 +1,42 @@
+name: Import v1 reproducible Linux MBR test helpers
+on:
+  push:
+    branches:
+      - experimental/arm64-v1-kernel-candidate
+    paths:
+      - bootstrap/arm64-v1-helper-source.patch.xz.b64
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-v1-kernel-candidate
+          fetch-depth: 0
+      - name: Validate patch and import original test sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          input=bootstrap/arm64-v1-helper-source.patch.xz.b64
+          if [ ! -f "$input" ]; then
+            echo 'Source already imported; no action needed.'
+            exit 0
+          fi
+          echo '47c6cfce04eb92737ec86a724c0668d7a7bea9c157303732812052adf8d56cf8  bootstrap/arm64-v1-helper-source.patch.xz.b64' | sha256sum -c -
+          base64 --decode "$input" | xz -d > /tmp/import.patch
+          git apply --check /tmp/import.patch
+          git apply /tmp/import.patch
+          rm "$input"
+          rmdir bootstrap || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm python3
+          make ARCH=arm64 -j2
+          python3 -m unittest arm64.tests.test_real_linux_image -v
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test(arm64): include standalone real Linux MBR disk and initramfs tooling'
+          git push origin HEAD:experimental/arm64-v1-kernel-candidate
