@@ -1,0 +1,46 @@
+name: Import SeaBIOS ARM64 v1.4 source patch
+on:
+  push:
+    branches:
+      - experimental/arm64-fat32-linux-v1.4
+    paths:
+      - bootstrap/v14.patch.xz.b64
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-fat32-linux-v1.4
+          fetch-depth: 0
+      - name: Verify and import v1.4 source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bootstrap/v14.patch.xz.b64
+          base64 -d bootstrap/v14.patch.xz.b64 | xz -d > /tmp/v14.patch
+          git apply --check /tmp/v14.patch
+          git apply /tmp/v14.patch
+          rm bootstrap/v14.patch.xz.b64
+          rmdir bootstrap || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(arm64): shared FAT32 reader and native Linux file boot (v1.4)'
+          git push origin HEAD:experimental/arm64-fat32-linux-v1.4
+      - name: Install build dependencies and QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make gcc
+      - name: Build firmware, run FAT32 smoke tests and preserve x86 build
+        run: |
+          make ARCH=arm64 -j2
+          make ARCH=arm64 test
+          make ARCH=arm64 qemu-test
+          make ARCH=arm64 qemu-fat-linux-test
+          make -j2
+          test "$(stat -c%s out/bios.bin)" = 262144
