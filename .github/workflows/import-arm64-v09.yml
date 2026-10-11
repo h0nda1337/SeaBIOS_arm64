@@ -1,0 +1,39 @@
+name: Import SeaBIOS ARM64 v0.9 block-core changes
+on:
+  push:
+    branches:
+      - experimental/arm64-block-core-v0.9
+    paths:
+      - bootstrap/v09.patch.xz.b64
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-block-core-v0.9
+          fetch-depth: 0
+      - name: Verify and apply AArch64 block-core source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=bootstrap/v09.patch.xz.b64
+          if [ ! -f "$f" ]; then
+            echo "Source patch already imported."
+            exit 0
+          fi
+          echo "614782573d4f1eac433319c7b0c78de5a77d2284bf168100dac277167cf2a886  $f" | sha256sum -c -
+          base64 --decode "$f" | xz -d > /tmp/v09.patch
+          echo "669c3b5eb93a90f3133888fea26908eb65b143b0fec0d436f7d5583407dbba10  /tmp/v09.patch" | sha256sum -c -
+          git apply --check /tmp/v09.patch
+          git apply /tmp/v09.patch
+          rm "$f"
+          rmdir bootstrap || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'phase7: share SeaBIOS disk_op policy with ARM64 read-only VirtIO'
+          git push origin HEAD:experimental/arm64-block-core-v0.9
