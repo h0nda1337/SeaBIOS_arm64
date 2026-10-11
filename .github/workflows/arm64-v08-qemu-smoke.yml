@@ -1,0 +1,47 @@
+name: SeaBIOS ARM64 v0.8 smoke (experimental)
+
+on:
+  push:
+    branches:
+      - experimental/arm64-bootflow-v0.8
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install AArch64 cross-build and QEMU tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm qemu-system-arm python3 make
+      - name: Build native AArch64 firmware and synthetic fixtures
+        run: make ARCH=arm64
+      - name: Run unit tests for genuine shared SeaBIOS code and FDT
+        run: make ARCH=arm64 test
+      - name: Run AArch64 QEMU diagnostic boot tests
+        run: make ARCH=arm64 qemu-test
+      - name: Validate fw_cfg boot priority with VirtIO v1 and v2
+        run: make ARCH=arm64 qemu-bootorder-test
+      - name: Validate relocated PE32+ ARM64 legacy stage
+        run: make ARCH=arm64 qemu-reloc-test
+
+  x86:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install original SeaBIOS x86 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential gcc-multilib binutils python3 make
+      - name: Rebuild original x86 SeaBIOS
+        run: |
+          make
+          test -s out/bios.bin
+          test "$(stat -c%s out/bios.bin)" -eq 262144
