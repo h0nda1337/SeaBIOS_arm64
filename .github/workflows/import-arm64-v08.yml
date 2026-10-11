@@ -5,6 +5,7 @@ on:
       - experimental/arm64-bootflow-v0.8
     paths:
       - bootstrap/v08.patch.xz.b64
+      - .github/workflows/import-arm64-v08.yml
   workflow_dispatch:
 permissions:
   contents: write
@@ -26,8 +27,8 @@ jobs:
           fi
           echo "d5b6079f1de0d277bf731134e4af8bb0309be4c672018b12eb290fde48c409ab  bootstrap/v08.patch.xz.b64" | sha256sum -c -
           base64 --decode bootstrap/v08.patch.xz.b64 | xz -dc > /tmp/v08.patch
-          git apply --check /tmp/v08.patch
-          git apply /tmp/v08.patch
+          git apply --check --exclude=README.md /tmp/v08.patch
+          git apply --exclude=README.md /tmp/v08.patch
           rm bootstrap/v08.patch.xz.b64
           rmdir bootstrap || true
           git config user.name 'github-actions[bot]'
