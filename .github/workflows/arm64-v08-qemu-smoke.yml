@@ -19,7 +19,7 @@ jobs:
       - name: Install AArch64 cross-build and QEMU tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld llvm qemu-system-arm python3 make
+          sudo apt-get install -y --no-install-recommends clang lld llvm qemu-system-arm qemu-system-data ipxe-qemu python3 make
       - name: Build native AArch64 firmware and synthetic fixtures
         run: make ARCH=arm64
       - name: Run unit tests for genuine shared SeaBIOS code and FDT
