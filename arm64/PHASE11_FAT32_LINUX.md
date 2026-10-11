@@ -48,3 +48,10 @@ FAT32 requires at least 65,525 data clusters. There is no LFN support, FAT
 write support, VFAT boot menu, chainload of x86 VBR, EFI, Linux root filesystem
 mount or Windows NT loader. The Linux kernel Image is capped at 64 MiB and
 initrd at 16 MiB. Both firmware and QEMU integration remain experimental.
+
+## CI tracking
+
+The independent v1.4 GitHub Actions workflow performs synthetic FAT32,
+x86/ARM64 build regressions and then attempts real Debian ARM64 Linux boot
+from FAT32 on disk 1 in both VirtIO v1 and v2. A green CI result is required
+to claim actual Linux-from-FAT32 userspace execution.
