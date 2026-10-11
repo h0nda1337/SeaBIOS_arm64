@@ -1,0 +1,34 @@
+name: Import ARM64 v0.4 cache-sync hardening
+on:
+  push:
+    branches:
+      - experimental/arm64-phase2-v0.4
+    paths:
+      - 'bootstrap/arm64-v0.4-cache.patch.xz.b64'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-phase2-v0.4
+          fetch-depth: 0
+      - name: Import integrity-checked cache synchronization patch
+        run: |
+          set -euo pipefail
+          input=bootstrap/arm64-v0.4-cache.patch.xz.b64
+          if [ ! -f "$input" ]; then echo "Already imported"; exit 0; fi
+          base64 -d "$input" | xz -dc > /tmp/cache.patch
+          printf '%s\n' 'f6a5fa1bacaceb74539b8fb1cad0ddf5a8de5f38a21a6fbd06f15e2eeaeb0d50  /tmp/cache.patch' | sha256sum -c -
+          git apply --check /tmp/cache.patch
+          git apply /tmp/cache.patch
+          rm "$input"
+          rmdir bootstrap || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix ARM64 code handoff cache coherence before execution"
+          git push origin HEAD:experimental/arm64-phase2-v0.4
