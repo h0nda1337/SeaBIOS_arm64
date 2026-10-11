@@ -1,0 +1,38 @@
+name: Publish experimental ARM64 legacy MBR v0.6 sources
+on:
+  push:
+    branches:
+      - experimental/arm64-legacy-mbr-v0.6
+    paths:
+      - bootstrap/v0.6.ready
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout v0.6 branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-legacy-mbr-v0.6
+          fetch-depth: 0
+      - name: Apply vetted v0.4 to v0.6 source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 01 02 03 04 05 06; do
+            test -f "bootstrap/v0.6.part${i}"
+          done
+          cat bootstrap/v0.6.part{01..06} | base64 --decode > /tmp/v0.6-patch.xz
+          echo "8ca23620e0adc90d7d54ca5932889a68b0512390c216f9571e025858ff2da49a  /tmp/v0.6-patch.xz" | sha256sum --check
+          xz --decompress --stdout /tmp/v0.6-patch.xz > /tmp/v0.6.patch
+          echo "99b94e352535150cdac6f1a0e25e69b0ee582d1c1ec08f56ca304d853ac9de13  /tmp/v0.6.patch" | sha256sum --check
+          git apply --check /tmp/v0.6.patch
+          git apply /tmp/v0.6.patch
+          rm bootstrap/v0.6.part{01..06} bootstrap/v0.6.ready
+          rmdir bootstrap
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(arm64): legacy MBR FAT32 stage2 and native ARM64 PE boot (v0.6-dev)'
+          git push origin HEAD:experimental/arm64-legacy-mbr-v0.6
