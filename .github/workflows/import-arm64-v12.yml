@@ -27,8 +27,8 @@ jobs:
           echo '122551c8389b602b67a4c16a1746f481af5314ee9022a357afb3efb5d38a4598  /tmp/arm64-v12.patch.xz' | sha256sum -c -
           xz -dc /tmp/arm64-v12.patch.xz > /tmp/arm64-v12.patch
           echo '804fe80b8ba36522c5d7dde2b8ff39a558a2a32a424a25781f3993f16933fcfa  /tmp/arm64-v12.patch' | sha256sum -c -
-          git apply --exclude=README.md --exclude=arm64/README.md --check /tmp/arm64-v12.patch
-          git apply --exclude=README.md --exclude=arm64/README.md /tmp/arm64-v12.patch
+          git apply --exclude=README.md --exclude=arm64/README.md --exclude=.github/workflows/arm64-v12-verify.yml --check /tmp/arm64-v12.patch
+          git apply --exclude=README.md --exclude=arm64/README.md --exclude=.github/workflows/arm64-v12-verify.yml /tmp/arm64-v12.patch
           rm bootstrap/arm64-v12.part{0,1,2,3} bootstrap/v12.ready
           rmdir bootstrap || true
       - name: Install QEMU and compilers
