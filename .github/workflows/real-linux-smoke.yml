@@ -1,0 +1,104 @@
+name: Real AArch64 Linux boot from MBR (no UEFI)
+on:
+  push:
+    branches:
+      - experimental/arm64-v1-kernel-candidate
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare ARM64 toolchain and QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3
+      - name: Build native SeaBIOS AArch64 firmware, no UEFI
+        run: make ARCH=arm64 -j2
+      - name: Download real Debian 6.12 ARM64 cloud kernel
+        run: |
+          set -euo pipefail
+          curl -fLS --retry 3 -o /tmp/kernel.deb 'https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-image-6.12.111%2Bdeb13-cloud-arm64-unsigned_6.12.111-1_arm64.deb'
+          test "$(dpkg-deb --field /tmp/kernel.deb Architecture)" = arm64
+          dpkg-deb -x /tmp/kernel.deb /tmp/deb-kernel
+          find /tmp/deb-kernel/boot -maxdepth 1 -type f
+      - name: Assemble MBR disk, raw Image and Linux AArch64 initramfs
+        run: |
+          python3 - <<'PY'
+          import gzip,struct,subprocess
+          from pathlib import Path
+          p=Path('/tmp')
+          files=list((p/'deb-kernel/boot').glob('vmlinuz-*'))
+          if len(files)!=1: raise SystemExit(f'expected one kernel, got {files}')
+          raw=files[0].read_bytes()
+          if raw[:2]==b'\x1f\x8b': raw=gzip.decompress(raw)
+          if len(raw)<512 or raw[0x38:0x3c]!=b'ARM\x64':
+              raise SystemExit(f'not a raw ARM64 Image: size={len(raw)} header={raw[:64].hex()}')
+          off,size,flags=struct.unpack_from('<QQQ',raw,8)
+          print(f'Debian actual kernel: bytes={len(raw)}, declared={size}, off={off}, flags={flags}')
+          if not 512 <= len(raw) <= size <= 64*1024*1024: raise SystemExit('unhandled image size')
+          asm='.text\n.global _start\n_start:\nmov x0,#1\nadr x1,msg\nmov x2,#35\nmov x8,#64\nsvc #0\n1: wfe\nb 1b\nmsg:\n.ascii "SEABIOS_REAL_LINUX_USERSPACE_REACHED\\n"\n'
+          (p/'init.S').write_text(asm)
+          subprocess.run(['clang','--target=aarch64-linux-gnu','-nostdlib','-static','-fuse-ld=lld','-Wl,-e,_start','-o',str(p/'init'),str(p/'init.S')],check=True)
+          elf=(p/'init').read_bytes()
+          def pad4(buf): return buf + b'\0'*(-len(buf)%4)
+          def entry(name,data,mode,major=0,minor=0,ino=1):
+              n=name.encode()+b'\0'
+              fields=[ino,mode,0,0,1,0,len(data),0,0,major,minor,len(n),0]
+              return pad4(b'070701'+b''.join(f'{v:08x}'.encode() for v in fields)+n)+pad4(data)
+          initrd=(entry('.',b'',0o040755)+entry('dev',b'',0o040755,ino=2)
+                  +entry('dev/console',b'',0o020600,major=5,minor=1,ino=3)
+                  +entry('init',elf,0o100755,ino=4)+entry('TRAILER!!!',b'',0,ino=5))
+          def align(n,s): return (n+s-1)//s*s
+          start=2048
+          kernel_sec=align(size,512)//512
+          init_lba=align(start+kernel_sec,2048)
+          init_sec=align(len(initrd),512)//512
+          disk=p/'real-linux-mbr.img'
+          mbr=bytearray(512)
+          def part(status,typ,lba,count):
+              return struct.pack('<B3sB3sII',status,b'\xfe\xff\xff',typ,b'\xfe\xff\xff',lba,count)
+          mbr[446:462]=part(0x80,0x83,start,kernel_sec)
+          mbr[462:478]=part(0,0xda,init_lba,init_sec)
+          mbr[510:]=b'\x55\xaa'
+          with disk.open('wb') as f:
+              f.truncate(align(init_lba+init_sec,2048)*512)
+              f.write(mbr)
+              f.seek(start*512);f.write(raw)
+              f.seek(init_lba*512);f.write(initrd)
+          print(f'MBR disk: {disk.stat().st_size} bytes, /init ELF={len(elf)} bytes')
+          PY
+      - name: Boot real kernel through SeaBIOS and look for Linux userspace
+        run: |
+          python3 - <<'PY'
+          import signal,subprocess
+          from pathlib import Path
+          args=['qemu-system-aarch64','-machine','virt','-cpu','cortex-a72','-m','512M',
+                '-smp','1','-display','none','-monitor','none','-serial','stdio',
+                '-bios','arm64/out/seabios-arm64.bin','-drive',
+                'if=none,format=raw,readonly=on,file=/tmp/real-linux-mbr.img,id=d0',
+                '-device','virtio-blk-device,drive=d0']
+          p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
+          try:
+              out,_=p.communicate(timeout=100)
+          except subprocess.TimeoutExpired:
+              import os
+              os.killpg(p.pid,signal.SIGKILL)
+              out,_=p.communicate(timeout=5)
+          log=out.decode(errors='replace')
+          Path('/tmp/seabios-real-linux.log').write_text(log)
+          print(log[-24000:])
+          assert 'Linux version' in log, 'No real kernel Linux version banner'
+          assert 'SEABIOS_REAL_LINUX_USERSPACE_REACHED' in log, 'Linux did not execute initramfs /init'
+          print('PASS: real Linux ARM64 userspace reached via SeaBIOS MBR (no UEFI)')
+          PY
+      - name: Save evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seabios-arm64-real-linux-boot
+          path: /tmp/seabios-real-linux.log
+          if-no-files-found: ignore
