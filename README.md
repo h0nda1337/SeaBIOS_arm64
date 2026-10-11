@@ -2,6 +2,19 @@
 
 ## SeaBIOS-ARM64
 
+### v1.0 experimental — real Linux ARM64 boot from legacy MBR, no UEFI
+
+**Milestone achieved:** our native AArch64 firmware loads an authentic Debian
+Linux 6.12 ARM64 kernel from a raw MBR partition via SeaBIOS-style block I/O,
+prepares an initramfs and Device Tree, and successfully runs Linux userspace
+`/init` in QEMU. Verified on **both legacy and modern VirtIO-MMIO** transports.
+See [v1.0 milestone documentation](arm64/V1_MILESTONE.md) and the
+[successful dual-mode GitHub Actions run](https://github.com/h0nda1337/SeaBIOS_arm64/actions/runs/38109370998).
+
+**No UEFI and no Windows ARM64 boot.** This is a major experimental milestone,
+not a full implementation of the original SeaBIOS POST/runtime ABI.
+
+
 **An authentic port of SeaBIOS to AArch64 — not a new firmware merely inspired by it.**
 
 The objective is to retain the original [SeaBIOS](https://github.com/qemu/seabios)

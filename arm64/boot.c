@@ -67,7 +67,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 legacy MBR v0.9-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 legacy MBR v1.0-experimental (AArch64/QEMU virt)\n");
     arm64_report_cpu();
     arm64_timer_init();
     struct fdt_info info;

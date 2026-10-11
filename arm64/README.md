@@ -1,6 +1,6 @@
-# SeaBIOS-ARM64 experimental port
+# SeaBIOS-ARM64 v1.0-experimental
 
-The goal is a **recognizable and maintainable port of the original SeaBIOS**,
+Milestone: [v1.0 genuine Linux ARM64 boot from MBR (no UEFI)](V1_MILESTONE.md).\n\nThe goal is a **recognizable and maintainable port of the original SeaBIOS**,
 not a separately developed firmware that happens to share its name.
 
 - Latest technical status: [PHASE6_BOOTLIST_PE_RELOC.md](PHASE6_BOOTLIST_PE_RELOC.md)
