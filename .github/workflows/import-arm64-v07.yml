@@ -4,7 +4,7 @@ on:
     branches:
       - experimental/arm64-shared-core-v0.7
     paths:
-      - bootstrap/ready.txt
+      - bootstrap/v07.patch
 permissions:
   contents: write
 jobs:
@@ -20,14 +20,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f bootstrap/ready.txt
-          test "$(find bootstrap -name 'v07.part*' | wc -l)" -eq 5
-          cat bootstrap/v07.part* | base64 --decode > /tmp/arm64-v07.patch.xz
-          echo '72e487fe0f968586cd809c4da4c96e714f8478fa65b35c5167b8607edea8bae3  /tmp/arm64-v07.patch.xz' | sha256sum -c -
-          xz --test /tmp/arm64-v07.patch.xz
-          xz --decompress --stdout /tmp/arm64-v07.patch.xz > /tmp/arm64-v07.patch
-          git apply --check /tmp/arm64-v07.patch
-          git apply /tmp/arm64-v07.patch
+          echo '820ed61425d1bbe41a0b16a47f30c494225aae31cd35b8cdb190ce2ea43cd79a  bootstrap/v07.patch' | sha256sum -c -
+          git apply --check bootstrap/v07.patch
+          git apply bootstrap/v07.patch
           rm -rf bootstrap
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
