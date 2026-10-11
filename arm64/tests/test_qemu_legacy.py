@@ -98,7 +98,19 @@ def main():
             run_case(mode, flags, expected, forbidden, pe=True)
             completed += 1
             print(f'PASS: {mode} {name}', flush=True)
-    print(f'Passed {completed}/{(len(cases) + len(pe_cases)) * 2} legacy MBR/FAT32 QEMU scenarios')
+    # Cryptographic integrity extension reusing upstream SeaBIOS src/sha256.c.
+    for mode in ('v1', 'v2'):
+        run_case(mode, ['--sha256'],
+                 (PROBE, 'stage2 SHA-256 OK (not authenticated)', SUCCESS),
+                 ('SHA-256 mismatch',))
+        completed += 1
+        print(f'PASS: {mode} SHA-256 legacy stage2', flush=True)
+        run_case(mode, ['--sha256', '--bad-checksum'],
+                 (PROBE, 'stage2 SHA-256 mismatch'),
+                 (SUCCESS,))
+        completed += 1
+        print(f'PASS: {mode} SHA-256 corruption rejected', flush=True)
+    print(f'Passed {completed}/{(len(cases) + len(pe_cases)) * 2 + 4} legacy MBR/FAT32 QEMU scenarios')
 
 if __name__ == '__main__':
     main()

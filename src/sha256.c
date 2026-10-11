@@ -14,11 +14,23 @@
  *  See: NIST standard for SHA-256 in FIPS PUB 180-4
  */
 
+#ifdef CONFIG_AARCH64
+#include "types.h"
+#include "sha.h"
+#include "../arm64/include/seabios_compat.h"
+/* The original hash algorithm is architecture-independent; only its x86
+ * byte swaps and rotate helper need freestanding AArch64 equivalents. */
+#define cpu_to_be32(x) __builtin_bswap32((u32)(x))
+#define cpu_to_be64(x) __builtin_bswap64((u64)(x))
+#define be32_to_cpu(x) __builtin_bswap32((u32)(x))
+static inline u32 ror(u32 x, int n) { return (x >> n) | (x << (32 - n)); }
+#else
 #include "config.h"
 #include "byteorder.h"
 #include "sha.h"
 #include "string.h"
 #include "x86.h"
+#endif
 
 typedef struct _sha256_ctx {
     u32 h[8];

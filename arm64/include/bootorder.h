@@ -9,10 +9,14 @@ struct arm64_boot_target {
     struct hlist_node link;
     int priority;
     const char *name;
+    /* Upstream fw_cfg bootorder glob; NULL for non-device candidates. */
+    const char *firmware_path;
     int (*attempt)(void *context);
     void *context;
 };
 
 void arm64_boot_register(struct arm64_boot_target *target);
 void arm64_boot_execute(void);
+int arm64_bootprio_find(const char *path);
+void arm64_boot_set_disk_path(const char *path);
 #endif

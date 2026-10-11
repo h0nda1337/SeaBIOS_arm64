@@ -57,6 +57,7 @@ void arm64_virtio_discover(const struct fdt_info *info);
 int arm64_virtio_blk_read(uint64_t lba, void *out);
 int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count);
 uint64_t arm64_virtio_blk_capacity(void);
+uintptr_t arm64_virtio_blk_mmio(void);
 void arm64_disk_probe(void);
 void arm64_linux_discover(void *dtb);
 void arm64_legacy_discover(void *dtb);

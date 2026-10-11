@@ -5,6 +5,7 @@ Diagnostic format is custom (SBARMLE1), not Windows and not an x86 VBR.
 Only used for reproducible QEMU firmware smoke tests.
 """
 import argparse
+import hashlib
 import struct
 from pathlib import Path
 
@@ -13,6 +14,7 @@ p.add_argument('stage', type=Path)
 p.add_argument('output', type=Path)
 p.add_argument('--inactive', action='store_true')
 p.add_argument('--pe', action='store_true', help='raw synthetic PE32+ file')
+p.add_argument('--sha256', action='store_true', help='SBARMLE2 with original SeaBIOS SHA-256')
 p.add_argument('--bad-pe-subsystem', action='store_true')
 p.add_argument('--bad-pe-machine', action='store_true')
 p.add_argument('--bad-pe-base', action='store_true')
@@ -34,8 +36,12 @@ for b in stage:
     fnv = ((fnv ^ b) * 16777619) & 0xffffffff
 if a.bad_checksum: fnv ^= 0x1
 header = bytearray(64)
-header[:8] = b'SBARMLE1' if not a.bad_magic else b'MZARMLE1'
+header[:8] = (b'SBARMLE2' if a.sha256 else b'SBARMLE1') if not a.bad_magic else b'MZARMLE1'
 struct.pack_into('<II', header, 8, len(stage), fnv)
+if a.sha256:
+    header[16:48] = hashlib.sha256(stage).digest()
+    if a.bad_checksum:
+        header[16] ^= 1
 filedata = bytearray(stage if a.pe else header + stage)
 if a.pe:
     peoffset = struct.unpack_from('<I', filedata, 0x3c)[0]

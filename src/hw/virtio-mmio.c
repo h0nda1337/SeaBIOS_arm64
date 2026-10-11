@@ -215,6 +215,11 @@ int arm64_virtio_blk_read(uint64_t lba, void *out)
     return arm64_virtio_blk_read_many(lba, out, 1);
 }
 
+uintptr_t arm64_virtio_blk_mmio(void)
+{
+    return BlockBase;
+}
+
 uint64_t arm64_virtio_blk_capacity(void)
 {
     return BlockBase ? BlockSectors : 0;

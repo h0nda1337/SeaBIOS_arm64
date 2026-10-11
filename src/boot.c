@@ -14,6 +14,7 @@
 #include "hw/rtc.h" // rtc_read
 #include "hw/usb.h" // struct usbdevice_s
 #include "list.h" // hlist_node
+#include "bootprio.h" // shared original bootorder matcher
 #include "malloc.h" // free
 #include "output.h" // dprintf
 #include "romfile.h" // romfile_loadint
@@ -29,26 +30,6 @@
 // See if 'str' starts with 'glob' - if glob contains an '*' character
 // it will match any number of characters in str that aren't a '/' or
 // the next glob character.
-static char *
-glob_prefix(const char *glob, const char *str)
-{
-    for (;;) {
-        if (!*glob && (!*str || *str == '/'))
-            return (char*)str;
-        if (*glob == '*') {
-            if (!*str || *str == '/' || *str == glob[1])
-                glob++;
-            else
-                str++;
-            continue;
-        }
-        if (*glob != *str)
-            return NULL;
-        glob++;
-        str++;
-    }
-}
-
 #define FW_PCI_DOMAIN "/pci@i0cf8"
 
 static char *
@@ -177,7 +158,7 @@ boot_lchs_find(const char *glob)
     dprintf(1, "Searching bios-geometry for: %s\n", glob);
     int i;
     for (i = 0; i < BiosGeometryCount; i++)
-        if (glob_prefix(glob, BiosGeometry[i].name))
+        if (bootprio_glob_prefix(glob, BiosGeometry[i].name))
             return &BiosGeometry[i];
     return NULL;
 }
@@ -290,7 +271,7 @@ find_prio(const char *glob)
     dprintf(1, "Searching bootorder for: %s\n", glob);
     int i;
     for (i = 0; i < BootorderCount; i++)
-        if (glob_prefix(glob, Bootorder[i]))
+        if (bootprio_glob_prefix(glob, Bootorder[i]))
             return i+1;
     return -1;
 }

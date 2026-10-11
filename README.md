@@ -9,6 +9,18 @@ identity: its architecture, boot flow, recognizable C subsystems and original
 x86 build wherever technically possible. ARM64-specific hardware interfaces
 should be isolated behind architecture backends, not silently replace SeaBIOS.
 
+### Shared SeaBIOS core phase — v0.7-dev (No UEFI)
+
+The original boot-order glob matcher from `src/boot.c` now lives in the shared
+`src/bootprio.c` implementation built by both SeaBIOS x86 and AArch64.
+The AArch64 loader honors QEMU's `fw_cfg` VirtIO-MMIO boot priority as a
+real `bootorder` entry. The original `src/sha256.c` also builds on AArch64,
+with an optional SHA-256 integrity-checked native MBR stage-2 container
+(`SBARMLE2`; old `SBARMLE1` remains supported). SHA-256 does not authenticate
+untrusted disk contents. Synthetic payloads still do not boot Windows ARM64.
+
+See [Phase 5 — shared source](arm64/PHASE5_SHARED_CORE.md).
+
 ### Experimental legacy MBR phase — v0.6-dev (No UEFI)
 
 This branch adds a native AArch64 BIOS-like boot path: **active MBR
@@ -72,7 +84,7 @@ original.** No buscamos desarrollar otro firmware que simplemente utilice su
 nombre. La primera etapa ya enlaza módulos originales de SeaBIOS en AArch64,
 pero aún no implementa su POST completo, el arranque de sistemas operativos ni UEFI.
 
-**Estado:** v0.5-dev, compilaciones ARM64 y x86 verificadas; lectura VirtIO,
+**Estado:** v0.7-dev, compilaciones ARM64 y x86 verificadas; lectura VirtIO,
 initrd experimental y entrega del Device Tree probadas en QEMU 10.0.13
 mediante un programa ARM64 sintético. No se ha arrancado un kernel Linux
 auténtico ni Windows ARM64. Consulta [PHASE3.md](arm64/PHASE3.md).

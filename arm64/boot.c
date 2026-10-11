@@ -67,7 +67,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 legacy MBR v0.6-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 legacy MBR v0.7-dev (AArch64/QEMU virt)\n");
     arm64_report_cpu();
     arm64_timer_init();
     struct fdt_info info;
@@ -121,6 +121,16 @@ void boot_main(void *dtb)
         uart_puts("[arm64] no fw_cfg node in Device Tree\n");
     }
     arm64_virtio_discover(&info);
+    /* SeaBIOS fw_cfg bootorder uses this exact legacy MMIO path format.
+     * Only the device-priority matcher is shared; no x86 BIOS ABI is used. */
+    static char BootMMIOPath[] = "/virtio-mmio@0000000000000000/*";
+    uintptr_t disk_mmio = arm64_virtio_blk_mmio();
+    if (disk_mmio) {
+        static const char hex[] = "0123456789abcdef";
+        for (int i = 0; i < 16; ++i)
+            BootMMIOPath[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
+        arm64_boot_set_disk_path(BootMMIOPath);
+    }
     arm64_disk_probe();
     arm64_legacy_discover(dtb);
     arm64_linux_discover(dtb);

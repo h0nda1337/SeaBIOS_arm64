@@ -3,6 +3,7 @@
 #include "include/arm64.h"
 #include "include/bootorder.h"
 #include "include/pe_legacy.h"
+#include "../src/sha.h"
 
 #define BPS 512u
 #define LEGACY_BASE UINT64_C(0x49000000)
@@ -191,17 +192,35 @@ static int load_legacy_stage(void *context)
         uart_puts("[legacy] native PE32+ ARM64 stage2 -> handoff (no EFI)\n");
         arm64_handoff((void *)(uintptr_t)entry, BootDtb);
     }
-    static const char magic[8] = { 'S','B','A','R','M','L','E','1' };
-    for (unsigned i = 0; i < 8; ++i)
+    static const char magic[7] = { 'S','B','A','R','M','L','E' };
+    for (unsigned i = 0; i < 7; ++i)
         if (dst[i] != (uint8_t)magic[i]) {
             uart_puts("[legacy] file is not a native ARM64 legacy stage2\n");
             return -6;
         }
-    uint32_t length = rd32(dst + 8), sum = rd32(dst + 12);
-    if (!length || length > FileBytes - LEGACY_HEADER ||
-        fnv1a32(dst + LEGACY_HEADER, length) != sum) {
-        uart_puts("[legacy] stage2 checksum/length rejected\n");
+    uint32_t length = rd32(dst + 8);
+    if (!length || length > FileBytes - LEGACY_HEADER)
         return -7;
+    if (dst[7] == '1') {
+        if (fnv1a32(dst + LEGACY_HEADER, length) != rd32(dst + 12)) {
+            uart_puts("[legacy] stage2 checksum/length rejected\n");
+            return -7;
+        }
+    } else if (dst[7] == '2') {
+        // This is an integrity check, NOT authentication or Secure Boot.
+        uint8_t digest[32];
+        sha256(dst + LEGACY_HEADER, length, digest);
+        unsigned mismatch = 0;
+        for (unsigned i = 0; i < 32; ++i)
+            mismatch |= digest[i] ^ dst[16 + i];
+        if (mismatch) {
+            uart_puts("[legacy] stage2 SHA-256 mismatch\n");
+            return -7;
+        }
+        uart_puts("[legacy] stage2 SHA-256 OK (not authenticated)\n");
+    } else {
+        uart_puts("[legacy] unknown stage2 format\n");
+        return -6;
     }
     arm64_cache_clean_range(dst, FileBytes);
     arm64_post_reserve_payload(LEGACY_BASE, FileBytes);

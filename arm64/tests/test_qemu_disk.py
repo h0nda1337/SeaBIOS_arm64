@@ -13,7 +13,7 @@ QEMU = os.environ.get('QEMU', 'qemu-system-aarch64')
 if not shutil.which(QEMU):
     sys.exit('qemu-system-aarch64 unavailable')
 
-BASE = [QEMU, '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
+BASE = [QEMU, *(['-L', os.environ['QEMU_ROM_DIR']] if os.environ.get('QEMU_ROM_DIR') else []), '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
         '-smp', '1', '-display', 'none', '-serial', 'stdio', '-monitor', 'none',
         '-bios', str(ROOT / 'out/seabios-arm64.bin')]
 IMAGE = ROOT / 'out/linux-image-diagnostic.bin'

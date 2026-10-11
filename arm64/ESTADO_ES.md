@@ -1,4 +1,4 @@
-# SeaBIOS-ARM64 — estado experimental de v0.6
+# SeaBIOS-ARM64 — estado experimental de v0.7
 
 **Ruta MBR FAT32 AArch64 funcional en QEMU, sin UEFI. Windows ARM64 no arranca.**
 
@@ -14,3 +14,14 @@ Los tests están en `arm64/tests/test_qemu_legacy.py` y la documentación
 completa en [PHASE4_LEGACY_MBR.md](PHASE4_LEGACY_MBR.md).
 
 **No se debe flashear a un dispositivo físico.**
+
+## Lo nuevo en v0.7
+
+- Coincidencia de prioridades `bootorder` compartida entre x86 y ARM64
+  a partir del codigo original de `src/boot.c`
+- Lectura de prioridad VirtIO-MMIO desde `fw_cfg` verificada en QEMU
+- `src/sha256.c` original compilado en ambas arquitecturas
+- Contenedor legacy opcional `SBARMLE2` con hash SHA-256 (integridad,
+  no autenticacion), manteniendo `SBARMLE1`
+
+**Windows ARM64 sigue sin arrancar. No existen servicios UEFI.**

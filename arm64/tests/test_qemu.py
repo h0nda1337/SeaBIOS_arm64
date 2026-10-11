@@ -12,17 +12,17 @@ qemu = os.environ.get('QEMU', 'qemu-system-aarch64')
 if not shutil.which(qemu):
     sys.exit('QEMU NOT INSTALLED: install qemu-system-arm and retry the runtime test')
 
-base = [qemu, '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
+base = [qemu, *(['-L', os.environ['QEMU_ROM_DIR']] if os.environ.get('QEMU_ROM_DIR') else []), '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
         '-smp', '1', '-display', 'none', '-serial', 'stdio', '-monitor', 'none',
         '-bios', str(ROOT / 'out' / 'seabios-arm64.bin')]
 
 for name, suffix, expected in [
-    ('no payload', [], ['SeaBIOS-ARM64 legacy MBR v0.6-dev', 'Device Tree bytes',
+    ('no payload', [], ['SeaBIOS-ARM64 legacy MBR v0.7-dev', 'Device Tree bytes',
                         '[boot] not found', 'halt (WFE)']),
     ('with diagnostic payload', [
         '-device', 'loader,file=' + str(ROOT / 'out' / 'diagnostic-payload.bin')
         + ',addr=0x48000000'],
-        ['SeaBIOS-ARM64 legacy MBR v0.6-dev', 'Device Tree bytes',
+        ['SeaBIOS-ARM64 legacy MBR v0.7-dev', 'Device Tree bytes',
          'valid diagnostic payload', 'CHAINLOAD OK'])
 ]:
     proc = subprocess.Popen(base + suffix, stdout=subprocess.PIPE,

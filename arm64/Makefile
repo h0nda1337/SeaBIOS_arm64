@@ -16,12 +16,12 @@ CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src
 OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
-        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
+        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
         $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test
+.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -41,6 +41,12 @@ $(OUT)/virtio-ring.o: $(ROOT)/src/hw/virtio-ring.c \
 
 $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
                     $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/sha256.o: $(ROOT)/src/sha256.c $(ROOT)/src/sha.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/bootprio.o: $(ROOT)/src/bootprio.c $(ROOT)/src/bootprio.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/romfile.o: $(ROOT)/src/romfile.c $(ROOT)/src/romfile.h \
@@ -99,6 +105,9 @@ $(OUT)/legacy-pe-stage.exe: $(OUT)/legacy-pe-stage.obj
 $(OUT)/legacy-mbr-test-disk.img: $(OUT)/legacy-stage.bin $(ARM)/tools/create_legacy_mbr_disk.py
 	python3 $(ARM)/tools/create_legacy_mbr_disk.py $< $@
 
+qemu-bootorder-test: all $(OUT)/legacy-mbr-test-disk.img
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_bootorder.py
+
 qemu-legacy-test: all $(OUT)/legacy-mbr-test-disk.img $(OUT)/legacy-pe-stage.exe
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_legacy.py
 
@@ -108,6 +117,7 @@ run: all
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_shared_core.py
 	python3 $(ARM)/tests/test_fdt_boot.py
 	python3 $(ARM)/tests/test_fdt.py
 	python3 $(ARM)/tests/test_payload.py
