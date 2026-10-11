@@ -1,0 +1,82 @@
+name: SeaBIOS ARM64 v1.4 FAT32 Linux MBR (no UEFI)
+on:
+  push:
+    branches:
+      - experimental/arm64-fat32-linux-v1.4
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchains and QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make gcc
+      - name: Build ARM64 and test filesystem boot
+        run: |
+          make ARCH=arm64 -j2
+          make ARCH=arm64 test
+          make ARCH=arm64 qemu-test
+          make ARCH=arm64 qemu-fat-linux-test
+          make ARCH=arm64 qemu-multidrive-test
+          make ARCH=arm64 qemu-multiboot-test
+      - name: Build original x86 SeaBIOS
+        run: |
+          make -j2
+          test -s out/bios.bin
+          test "$(stat -c%s out/bios.bin)" -eq 262144
+  real-linux-fat32:
+    runs-on: ubuntu-24.04
+    needs: build-and-synthetic
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang and AArch64 QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make
+      - name: Build ARM64 firmware
+        run: make ARCH=arm64 -j2
+      - name: Obtain a real Debian ARM64 Linux Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/linux-arm64.deb \
+            'https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-image-6.12.111%2Bdeb13-cloud-arm64-unsigned_6.12.111-1_arm64.deb'
+          test "$(dpkg-deb --field /tmp/linux-arm64.deb Architecture)" = arm64
+          dpkg-deb -x /tmp/linux-arm64.deb /tmp/linux-arm64
+          python3 - <<'PY'
+          import gzip
+          from pathlib import Path
+          paths = sorted(Path('/tmp/linux-arm64/boot').glob('vmlinuz-*'))
+          if len(paths) != 1:
+              raise SystemExit('Kernel binary is missing or ambiguous')
+          data = paths[0].read_bytes()
+          if data[:2] == b'\x1f\x8b':
+              data = gzip.decompress(data)
+          if len(data) < 512 or data[0x38:0x3c] != b'ARM\x64':
+              raise SystemExit('Not a genuine uncompressed AArch64 Image')
+          Path('/tmp/real-linux-Image').write_bytes(data)
+          print('Real Linux ARM64 Image:',len(data))
+          PY
+      - name: Boot real Linux from FAT32 MBR (VirtIO v1)
+        run: |
+          python3 arm64/tests/test_qemu_real_linux.py --fat32 --secondary-disk \
+            --image /tmp/real-linux-Image --timeout 110 \
+            --log /tmp/linux-fat32-v1.log
+      - name: Boot real Linux from FAT32 MBR (VirtIO v2)
+        run: |
+          python3 arm64/tests/test_qemu_real_linux.py --fat32 --secondary-disk \
+            --modern-virtio --image /tmp/real-linux-Image --timeout 110 \
+            --log /tmp/linux-fat32-v2.log
+      - name: Upload complete serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seabios-v14-real-linux-fat32-serial
+          path: /tmp/linux-fat32-v*.log
+          if-no-files-found: ignore
