@@ -21,7 +21,7 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test
+.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -131,6 +131,7 @@ run: all
 
 test:
 	python3 $(ARM)/tests/test_blockpolicy.py
+	cd $(ROOT) && python3 -m unittest arm64.tests.test_real_linux_image -v
 	python3 $(ARM)/tests/test_shared_core.py
 	python3 $(ARM)/tests/test_fdt_boot.py
 	python3 $(ARM)/tests/test_fdt.py
@@ -146,3 +147,9 @@ qemu-disk-test: all $(OUT)/linux-test-disk.img
 
 clean:
 	rm -rf $(OUT)
+
+# Requires an independently supplied *genuine* Linux ARM64 Image. Unlike the
+# old synthetic handoff tests, success requires a Linux userspace /init marker.
+qemu-real-linux-test: all
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_real_linux.py \
+	    --image "$(ARM64_REAL_LINUX_IMAGE)"
