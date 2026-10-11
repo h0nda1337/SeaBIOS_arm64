@@ -2,6 +2,22 @@
 
 ## SeaBIOS-ARM64
 
+### v1.3-dev — independent native ARM64 boot devices (No UEFI)
+
+The AArch64 boot manager now keeps each VirtIO-MMIO disk's own firmware
+pathname, MBR/GPT partition data and FAT32 boot-file state. It loads native
+ARM64 stages or a raw Linux Image from **disk 1 even if disk 0 is empty**.
+The existing shared SeaBIOS `bootorder` logic handles distinct per-device
+QEMU `bootindex` priorities. Ten local QEMU smoke scenarios passed on
+VirtIO-MMIO v1 and v2 (including synthetic Linux MBR/GPT handoff).
+
+[Technical details](arm64/PHASE12_BOOT_DEVICES.md) ·
+[New multidisk tests](arm64/tests/test_qemu_multiboot.py).
+
+CI additionally attempts a *genuine Debian ARM64 Linux kernel* from MBR on
+the second disk (with the first disk unbootable); its outcome must be checked
+from the workflow logs. No UEFI or Windows ARM64 loader has been implemented.
+
 ### v1.2-dev — multi-drive SeaBIOS registry, shared x86/ARM64 CHS geometry
 
 AArch64 now registers up to **four** independent read-only VirtIO-MMIO drives,
