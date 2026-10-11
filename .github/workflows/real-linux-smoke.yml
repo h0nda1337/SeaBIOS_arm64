@@ -40,7 +40,7 @@ jobs:
           off,size,flags=struct.unpack_from('<QQQ',raw,8)
           print(f'Debian actual kernel: bytes={len(raw)}, declared={size}, off={off}, flags={flags}')
           if not 512 <= len(raw) <= size <= 64*1024*1024: raise SystemExit('unhandled image size')
-          asm='.text\n.global _start\n_start:\nmov x0,#1\nadr x1,msg\nmov x2,#35\nmov x8,#64\nsvc #0\n1: wfe\nb 1b\nmsg:\n.ascii "SEABIOS_REAL_LINUX_USERSPACE_REACHED\\n"\n'
+          asm='.text\n.global _start\n_start:\nmov x0,#1\nadr x1,msg\nmov x2,#37\nmov x8,#64\nsvc #0\n1: wfe\nb 1b\nmsg:\n.ascii "SEABIOS_REAL_LINUX_USERSPACE_REACHED\\n"\n'
           (p/'init.S').write_text(asm)
           subprocess.run(['clang','--target=aarch64-linux-gnu','-nostdlib','-static','-fuse-ld=lld','-Wl,-e,_start','-o',str(p/'init'),str(p/'init.S')],check=True)
           elf=(p/'init').read_bytes()
