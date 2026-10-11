@@ -58,6 +58,8 @@ static int boot_linux_image(void *context)
             dst[block * SECTOR_BYTES + i] = ReadBatch[i];
         block += count;
     }
+    /* Kernel bytes written by the bootloader must reach PoC before execute. */
+    arm64_cache_clean_range(dst, size);
     arm64_post_reserve_payload(dest, size);
     uart_puts("[linux] Image loaded; entering AArch64 Image entry\n");
     arm64_handoff((void *)(uintptr_t)dest, LinuxDtb);

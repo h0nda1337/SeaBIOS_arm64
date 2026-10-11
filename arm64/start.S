@@ -76,6 +76,33 @@ arm64_handoff:
     br      x4
 .size arm64_handoff, . - arm64_handoff
 
+/* Clean a freshly loaded executable region to the Point of Coherency before
+ * branch and instruction-cache invalidation.  This is essential on physical
+ * ARM systems with data caches, even though QEMU's TCG is coherent.
+ * x0=region base, x1=byte length. CTR_EL0.DminLine encodes a 4 << N
+ * byte data-cache line. Caller validates address/length for overflow. */
+.global arm64_cache_clean_range
+.type arm64_cache_clean_range, %function
+arm64_cache_clean_range:
+    cbz     x1, .Lcache_done
+    mrs     x2, ctr_el0
+    ubfx    x2, x2, #16, #4
+    mov     x3, #4
+    lsl     x3, x3, x2
+    sub     x4, x3, #1
+    bic     x5, x0, x4
+    adds    x6, x0, x1
+    b.cs    .Lcache_done
+.Lcache_loop:
+    dc      cvac, x5
+    add     x5, x5, x3
+    cmp     x5, x6
+    b.lo    .Lcache_loop
+    dsb     sy
+.Lcache_done:
+    ret
+.size arm64_cache_clean_range, . - arm64_cache_clean_range
+
 /* 16 exception slots, each 128 bytes; vectors must be 2KiB aligned. */
 .section .text.vectors, "ax"
 .balign 2048

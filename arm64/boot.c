@@ -59,6 +59,7 @@ static int try_payload(void *context)
     uart_puts("[arm64] valid diagnostic payload -> branch ");
     uart_hex((uintptr_t)code);
     uart_newline();
+    arm64_cache_clean_range(code, len);
     arm64_handoff((void *)code, dtb);
 }
 

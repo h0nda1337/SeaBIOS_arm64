@@ -63,5 +63,6 @@ int arm64_post_memory(const struct fdt_info *info, const void *dtb);
 int arm64_post_can_load(uint64_t start, uint64_t size);
 void arm64_post_reserve_payload(uint64_t start, uint64_t size);
 void boot_main(void *dtb) __attribute__((noreturn));
+void arm64_cache_clean_range(const void *address, uint64_t length);
 void arm64_handoff(void *entry, void *dtb) __attribute__((noreturn));
 #endif

@@ -42,7 +42,8 @@ are not yet compiled or executed on ARM64.
 5. Basic Linux ARM64 `Image` header validation (magic `ARM\x64`, size,
    endianness and placement) and copying up to 64 MiB into reserved-checked RAM.
 6. AArch64 handoff with DTB in `x0`, other parameters cleared, interrupts
-   masked and instruction cache invalidated.
+   masked, data cache cleaned to PoC with `dc cvac` over loaded code and
+   instruction cache invalidated before branching.
 7. Tested on actual QEMU 10.0.13 using a small **synthetic AArch64 executable**
    bearing an ARM64 Linux Image header. It prints a diagnostic message. It
    is **not Linux** and does not establish Linux kernel boot support.
