@@ -48,7 +48,6 @@
 
 /* Independent split rings per device, not one global VirtIO context.
  * The same upstream SeaBIOS ring implementation is used for every disk. */
-#define ARM64_MAX_BLOCK_DRIVES 4u
 struct arm64_block_device {
     uintptr_t base;
     uint64_t sectors;

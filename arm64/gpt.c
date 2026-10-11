@@ -22,11 +22,12 @@ static uint64_t le64(const uint8_t *p)
 {
     return le32(p) | ((uint64_t)le32(p + 4) << 32);
 }
-int arm64_gpt_find_linux(uint64_t *first_lba, uint64_t *sector_count)
+int arm64_gpt_find_linux_at(uint32_t index, uint64_t *first_lba,
+                            uint64_t *sector_count)
 {
-    uint64_t capacity = arm64_virtio_blk_capacity();
+    uint64_t capacity = arm64_virtio_blk_capacity_at(index);
     if (!first_lba || !sector_count || capacity < 34 ||
-        arm64_virtio_blk_read(1, Header))
+        arm64_virtio_blk_read_at(index, 1, Header))
         return -1;
     static const char magic[] = "EFI PART";
     for (unsigned i = 0; i < 8; ++i)
@@ -62,7 +63,7 @@ int arm64_gpt_find_linux(uint64_t *first_lba, uint64_t *sector_count)
     uint64_t found_first = 0;
     uint64_t found_size = 0;
     for (uint32_t n = 0; n < entries / 4; ++n) {
-        if (arm64_virtio_blk_read(entries_lba + n, EntrySector))
+        if (arm64_virtio_blk_read_at(index, entries_lba + n, EntrySector))
             return -5;
         aggregate_crc = arm64_crc32(EntrySector, 512, aggregate_crc);
         for (unsigned j = 0; j < 4; ++j) {
@@ -87,4 +88,10 @@ int arm64_gpt_find_linux(uint64_t *first_lba, uint64_t *sector_count)
     *first_lba = found_first;
     *sector_count = found_size;
     return 0;
+}
+
+/* Original disk-0 API remains available to existing ARM64 consumers. */
+int arm64_gpt_find_linux(uint64_t *first_lba, uint64_t *sector_count)
+{
+    return arm64_gpt_find_linux_at(0, first_lba, sector_count);
 }

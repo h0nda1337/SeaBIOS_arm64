@@ -7,4 +7,6 @@ uint32_t arm64_crc32(const uint8_t *data, size_t size, uint32_t crc);
 /* Return 0 only for a validated GPT and a Linux filesystem partition.
  * A Linux filesystem partition is NOT necessarily a bootable raw Image. */
 int arm64_gpt_find_linux(uint64_t *first_lba, uint64_t *sector_count);
+int arm64_gpt_find_linux_at(uint32_t index, uint64_t *first_lba,
+                            uint64_t *sector_count);
 #endif

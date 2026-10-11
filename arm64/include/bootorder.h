@@ -4,6 +4,7 @@
 
 /* The exact linked-list primitive is reused from the original SeaBIOS. */
 #include "../../src/list.h"
+#include <stdint.h>
 
 struct arm64_boot_target {
     struct hlist_node link;
@@ -19,4 +20,6 @@ void arm64_boot_register(struct arm64_boot_target *target);
 void arm64_boot_execute(void);
 int arm64_bootprio_find(const char *path);
 void arm64_boot_set_disk_path(const char *path);
+void arm64_boot_set_disk_path_at(uint32_t index, const char *path);
+const char *arm64_boot_disk_path(uint32_t index);
 #endif

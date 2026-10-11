@@ -19,7 +19,15 @@ struct fat32_volume {
 };
 
 static struct fat32_volume Volume;
-static struct arm64_boot_target LegacyTarget;
+struct legacy_candidate {
+    struct arm64_boot_target target;
+    uint32_t drive_index;
+    struct fat32_volume volume;
+    uint32_t file_cluster, file_bytes;
+    void *dtb;
+};
+static struct legacy_candidate LegacyCandidates[ARM64_MAX_BLOCK_DRIVES];
+static uint32_t DriveIndex;
 static void *BootDtb;
 static uint8_t Sector[BPS];
 static uint8_t FatSector[BPS];
@@ -35,7 +43,7 @@ static uint32_t rd32(const uint8_t *p)
 }
 static int readpart(uint64_t offset, uint8_t *data)
 {
-    return arm64_virtio_blk_read(Volume.part_lba + offset, data);
+    return arm64_virtio_blk_read_at(DriveIndex, Volume.part_lba + offset, data);
 }
 
 /* FAT entries are cached a sector at a time; never trust a cluster value from
@@ -49,7 +57,7 @@ static int nextcluster(uint32_t cluster, uint32_t *next)
     if (fatbyte / BPS >= Volume.fat_sectors)
         return -1;
     if (sector != FatSectorLba) {
-        if (arm64_virtio_blk_read(sector, FatSector))
+        if (arm64_virtio_blk_read_at(DriveIndex, sector, FatSector))
             return -1;
         FatSectorLba = sector;
     }
@@ -77,7 +85,7 @@ static int findentry(uint32_t first, const char name[11], int isdir,
         uint64_t sector;
         if (cluster_sector(cluster, &sector)) return -1;
         for (uint32_t s = 0; s < Volume.spc; ++s) {
-            if (arm64_virtio_blk_read(sector + s, Directory)) return -1;
+            if (arm64_virtio_blk_read_at(DriveIndex, sector + s, Directory)) return -1;
             for (uint32_t p = 0; p < BPS; p += 32u) {
                 const uint8_t *e = Directory + p;
                 if (e[0] == 0) return -2;
@@ -104,8 +112,8 @@ static int findentry(uint32_t first, const char name[11], int isdir,
 /* Parse a genuinely active MBR FAT32 volume, not an x86 boot-sector ABI. */
 static int legacy_probe_mbr(void)
 {
-    uint64_t sectors = arm64_virtio_blk_capacity();
-    if (sectors < 2048 || arm64_virtio_blk_read(0, Sector)) return -1;
+    uint64_t sectors = arm64_virtio_blk_capacity_at(DriveIndex);
+    if (sectors < 2048 || arm64_virtio_blk_read_at(DriveIndex, 0, Sector)) return -1;
     if (Sector[510] != 0x55 || Sector[511] != 0xaa) return -1;
     uint64_t start = 0, count = 0;
     for (int i = 0; i < 4; ++i) {
@@ -157,7 +165,17 @@ static uint32_t fnv1a32(const uint8_t *p, uint32_t size)
 
 static int load_legacy_stage(void *context)
 {
-    (void)context;
+    const struct legacy_candidate *candidate = context;
+    if (!candidate)
+        return -1;
+    DriveIndex = candidate->drive_index;
+    Volume = candidate->volume;
+    FileCluster = candidate->file_cluster;
+    FileBytes = candidate->file_bytes;
+    BootDtb = candidate->dtb;
+    FatSectorLba = UINT64_MAX; /* Never reuse the cache across devices. */
+    uart_puts("[boot] legacy drive index ");
+    uart_dec(DriveIndex); uart_newline();
     if (FileBytes < LEGACY_HEADER + 4u || FileBytes > LEGACY_MAX ||
         !arm64_post_can_load(LEGACY_BASE, FileBytes)) return -1;
     uint32_t remaining = FileBytes;
@@ -168,7 +186,7 @@ static int load_legacy_stage(void *context)
         uint64_t sector;
         if (cluster_sector(cluster, &sector)) return -2;
         for (uint32_t s = 0; s < Volume.spc && remaining; ++s) {
-            if (arm64_virtio_blk_read(sector + s, Sector)) return -3;
+            if (arm64_virtio_blk_read_at(DriveIndex, sector + s, Sector)) return -3;
             uint32_t take = remaining < BPS ? remaining : BPS;
             for (uint32_t i = 0; i < take; ++i) dst[copied + i] = Sector[i];
             remaining -= take;
@@ -230,22 +248,36 @@ static int load_legacy_stage(void *context)
 
 void arm64_legacy_discover(void *dtb)
 {
-    if (legacy_probe_mbr()) return;
-    uint32_t boot = 0, ignored = 0;
-    if (findentry(Volume.root_cluster, "BOOT       ", 1, &boot, &ignored))
-        return;
-    if (findentry(boot, "ARM64   BIN", 0, &FileCluster, &FileBytes) &&
-        findentry(boot, "ARM64   EXE", 0, &FileCluster, &FileBytes))
-        return;
-    if (FileBytes < LEGACY_HEADER || FileBytes > LEGACY_MAX) {
-        uart_puts("[legacy] stage2 size rejected\n");
-        return;
+    for (uint32_t disk = 0; disk < arm64_virtio_blk_count() &&
+                            disk < ARM64_MAX_BLOCK_DRIVES; ++disk) {
+        DriveIndex = disk;
+        FatSectorLba = UINT64_MAX;
+        if (legacy_probe_mbr())
+            continue;
+        uint32_t boot = 0, ignored = 0;
+        if (findentry(Volume.root_cluster, "BOOT       ", 1,
+                      &boot, &ignored))
+            continue;
+        if (findentry(boot, "ARM64   BIN", 0, &FileCluster, &FileBytes) &&
+            findentry(boot, "ARM64   EXE", 0, &FileCluster, &FileBytes))
+            continue;
+        if (FileBytes < LEGACY_HEADER || FileBytes > LEGACY_MAX) {
+            uart_puts("[legacy] stage2 size rejected\n");
+            continue;
+        }
+        struct legacy_candidate *candidate = &LegacyCandidates[disk];
+        candidate->drive_index = disk;
+        candidate->volume = Volume;
+        candidate->file_cluster = FileCluster;
+        candidate->file_bytes = FileBytes;
+        candidate->dtb = dtb;
+        candidate->target.name = "active MBR FAT32 native AArch64 stage2";
+        candidate->target.priority = 3;
+        candidate->target.attempt = load_legacy_stage;
+        candidate->target.context = candidate;
+        candidate->target.firmware_path = arm64_boot_disk_path(disk);
+        arm64_boot_register(&candidate->target);
+        uart_puts("[legacy] active MBR FAT32 ARM64.BIN/ARM64.EXE candidate, disk ");
+        uart_dec(disk); uart_newline();
     }
-    BootDtb = dtb;
-    LegacyTarget.name = "active MBR FAT32 native AArch64 stage2";
-    LegacyTarget.priority = 3;
-    LegacyTarget.attempt = load_legacy_stage;
-    LegacyTarget.context = 0;
-    arm64_boot_register(&LegacyTarget);
-    uart_puts("[legacy] active MBR FAT32 ARM64.BIN/ARM64.EXE candidate\n");
 }

@@ -13,7 +13,6 @@
 extern int arm64_virtio_blk_read_many_transport_at(uint32_t index,
                            uint64_t lba, void *buf, uint32_t count);
 
-#define ARM64_MAX_BLOCK_DRIVES 4u
 static struct drive_s VirtioDrives[ARM64_MAX_BLOCK_DRIVES];
 static uint8_t DriveRegistered[ARM64_MAX_BLOCK_DRIVES];
 
@@ -98,6 +97,11 @@ int arm64_virtio_blk_read_many_at(uint32_t index, uint64_t lba,
 int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count)
 {
     return arm64_virtio_blk_read_many_at(0, lba, out, count);
+}
+
+int arm64_virtio_blk_read_at(uint32_t index, uint64_t lba, void *out)
+{
+    return arm64_virtio_blk_read_many_at(index, lba, out, 1);
 }
 
 int arm64_virtio_blk_read(uint64_t lba, void *out)

@@ -10,6 +10,27 @@ extern void uart_puts(const char *text);
  * SeaBIOS; the AArch64 boot *mechanisms* are still architecture-specific. */
 static struct hlist_head BootTargets;
 static const char *DiskPath;
+/* Each firmware pathname has static lifetime and belongs to its VirtIO disk. */
+static char BootPaths[ARM64_MAX_BLOCK_DRIVES][32];
+
+void arm64_boot_set_disk_path_at(uint32_t index, const char *path)
+{
+    if (index >= ARM64_MAX_BLOCK_DRIVES || !path)
+        return;
+    unsigned n = 0;
+    while (n + 1 < sizeof(BootPaths[index]) && path[n]) {
+        BootPaths[index][n] = path[n];
+        ++n;
+    }
+    BootPaths[index][n] = 0;
+}
+
+const char *arm64_boot_disk_path(uint32_t index)
+{
+    return index < ARM64_MAX_BLOCK_DRIVES && BootPaths[index][0]
+        ? BootPaths[index] : NULL;
+}
+
 
 void arm64_boot_set_disk_path(const char *path) { DiskPath = path; }
 

@@ -107,15 +107,19 @@ static int arm64_post_step(void *opaque, enum postflow_stage stage)
         return 0;
     case POSTFLOW_SYNC_DEVICES: {
         arm64_virtio_discover(info);
-        /* QEMU bootorder uses the exact VirtIO-MMIO legacy path format. */
-        static char boot_mmio_path[] = "/virtio-mmio@0000000000000000/*";
-        uintptr_t disk_mmio = arm64_virtio_blk_mmio();
-        if (disk_mmio) {
+        /* Each VirtIO disk receives its own stable QEMU firmware pathname.
+         * The SeaBIOS bootorder parser can now rank disks independently. */
+        for (uint32_t disk = 0; disk < arm64_virtio_blk_count(); ++disk) {
+            uintptr_t mmio = arm64_virtio_blk_mmio_at(disk);
+            if (!mmio)
+                continue;
+            char path[] = "/virtio-mmio@0000000000000000/*";
             static const char hex[] = "0123456789abcdef";
             for (int i = 0; i < 16; ++i)
-                boot_mmio_path[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
-            arm64_boot_set_disk_path(boot_mmio_path);
+                path[13 + i] = hex[(mmio >> ((15-i)*4)) & 15u];
+            arm64_boot_set_disk_path_at(disk, path);
         }
+        arm64_boot_set_disk_path(arm64_boot_disk_path(0));
         arm64_disk_probe();
         arm64_legacy_discover(ctx->dtb);
         arm64_linux_discover(ctx->dtb);
@@ -151,7 +155,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 legacy MBR v1.2-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 legacy MBR v1.3-dev (AArch64/QEMU virt)\n");
     arm64_report_cpu();
     arm64_timer_init();
     struct fdt_info info;

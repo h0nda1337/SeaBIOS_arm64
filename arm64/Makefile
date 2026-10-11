@@ -21,7 +21,7 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
+.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-multiboot-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -164,3 +164,7 @@ clean:
 qemu-real-linux-test: all
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_real_linux.py \
 	    --image "$(ARM64_REAL_LINUX_IMAGE)"
+
+# Phase 10: independent disk selection, native MBR/FAT32 stage2 and fw_cfg bootindex.
+qemu-multiboot-test: all $(OUT)/legacy-stage.bin
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_multiboot.py
