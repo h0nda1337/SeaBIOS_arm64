@@ -1,0 +1,37 @@
+name: Import SeaBIOS ARM64 phase 6 v0.8 source delta
+on:
+  push:
+    branches:
+      - experimental/arm64-bootflow-v0.8
+    paths:
+      - bootstrap/v08.patch.xz.b64
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-bootflow-v0.8
+          fetch-depth: 0
+      - name: Apply reviewed v0.7 -> v0.8 patch (NO compilation here)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f bootstrap/v08.patch.xz.b64 ]; then
+            echo "Already imported; nothing to do"
+            exit 0
+          fi
+          echo "d5b6079f1de0d277bf731134e4af8bb0309be4c672018b12eb290fde48c409ab  bootstrap/v08.patch.xz.b64" | sha256sum -c -
+          base64 --decode bootstrap/v08.patch.xz.b64 | xz -dc > /tmp/v08.patch
+          git apply --check /tmp/v08.patch
+          git apply /tmp/v08.patch
+          rm bootstrap/v08.patch.xz.b64
+          rmdir bootstrap || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'phase6: share original IPL sort and support ARM64 PE DIR64 relocations'
+          git push origin HEAD:experimental/arm64-bootflow-v0.8
