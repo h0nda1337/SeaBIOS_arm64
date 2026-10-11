@@ -168,7 +168,7 @@ error:
 
 /* One in-flight request. The original SeaBIOS virtio_blk_outhdr and
  * vring_desc are shared, while AArch64 requires its own transport routines. */
-int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count)
+int arm64_virtio_blk_read_many_transport(uint64_t lba, void *out, uint32_t count)
 {
     if (!BlockBase || !out || !count || count > MAX_READ_SECTORS ||
         lba >= BlockSectors || count > BlockSectors - lba)
@@ -208,11 +208,6 @@ int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count)
     for (unsigned i = 0; i < SECTOR_SIZE * count; i++)
         dst[i] = Transfer[i];
     return 0;
-}
-
-int arm64_virtio_blk_read(uint64_t lba, void *out)
-{
-    return arm64_virtio_blk_read_many(lba, out, 1);
 }
 
 uintptr_t arm64_virtio_blk_mmio(void)

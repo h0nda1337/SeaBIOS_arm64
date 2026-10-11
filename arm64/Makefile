@@ -17,7 +17,7 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
-        $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
+        $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
@@ -41,6 +41,9 @@ $(OUT)/virtio-ring.o: $(ROOT)/src/hw/virtio-ring.c \
 
 $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
                     $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/blockpolicy.o: $(ROOT)/src/blockpolicy.c $(ROOT)/src/blockpolicy.h $(ROOT)/src/block.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/sha256.o: $(ROOT)/src/sha256.c $(ROOT)/src/sha.h | $(OUT)
@@ -127,6 +130,7 @@ run: all
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_blockpolicy.py
 	python3 $(ARM)/tests/test_shared_core.py
 	python3 $(ARM)/tests/test_fdt_boot.py
 	python3 $(ARM)/tests/test_fdt.py

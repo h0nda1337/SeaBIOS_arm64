@@ -7,6 +7,7 @@
 
 #include "biosvar.h" // GET_GLOBAL
 #include "block.h" // process_op
+#include "blockpolicy.h" // shared request policy
 #include "hw/ata.h" // process_ata_op
 #include "hw/ahci.h" // process_ahci_op
 #include "hw/esp-scsi.h" // esp_scsi_process_op
@@ -522,22 +523,7 @@ block_setup(void)
     nvme_setup();
 }
 
-// Fallback handler for command requests not implemented by drivers
-int
-default_process_op(struct disk_op_s *op)
-{
-    switch (op->command) {
-    case CMD_FORMAT:
-    case CMD_RESET:
-    case CMD_ISREADY:
-    case CMD_VERIFY:
-    case CMD_SEEK:
-        // Return success if the driver doesn't implement these commands
-        return DISK_RET_SUCCESS;
-    default:
-        return DISK_RET_EPARAM;
-    }
-}
+/* Architecture-neutral default_process_op() moved to blockpolicy.c. */
 
 // Command dispatch for disk drivers that run in both 16bit and 32bit mode
 static int
@@ -623,17 +609,13 @@ process_op(struct disk_op_s *op)
             , op->drive_fl, (u32)op->lba, op->buf_fl
             , op->count, op->command);
 
-    int ret, origcount = op->count;
-    if (origcount * GET_FLATPTR(op->drive_fl->blksize) > 64*1024) {
-        op->count = 0;
-        return DISK_RET_EBOUNDARY;
-    }
+    u16 origcount = op->count;
+    int ret = blockop_prepare(op, GET_FLATPTR(op->drive_fl->blksize));
+    if (ret)
+        return ret;
     if (MODESEGMENT)
         ret = process_op_16(op);
     else
         ret = process_op_32(op);
-    if (ret && op->count == origcount)
-        // If the count hasn't changed on error, assume no data transferred.
-        op->count = 0;
-    return ret;
+    return blockop_finish(op, origcount, ret);
 }
