@@ -21,6 +21,19 @@ untrusted disk contents. Synthetic payloads still do not boot Windows ARM64.
 
 See [Phase 5 — shared source](arm64/PHASE5_SHARED_CORE.md).
 
+### v0.9-dev — Shared SeaBIOS block operations (No UEFI)
+
+ARM64 now registers a real SeaBIOS `drive_s` and handles `disk_op_s`
+operations before calling the VirtIO-MMIO transport. Shared policy
+`src/blockpolicy.c` factors the original SeaBIOS 64-KiB transfer rule,
+partial-read accounting, and default disk-command handling out of
+`src/block.c`; these functions are compiled for both x86 and ARM64.
+The x86 BIOS still builds, and selected ARM64 legacy MBR/FAT32 and
+PE32+ diagnostic stages run on QEMU VirtIO v1 and v2.
+
+**This is not a complete POST, does not boot Windows ARM64, and adds no UEFI.**
+See [Phase 7 — block core](arm64/PHASE7_BLOCK_CORE.md).
+
 ### Experimental v0.8 — Shared IPL ordering and relocated native PE (No UEFI)
 
 SeaBIOS's original IPL candidate-ordering policy is now factored into
@@ -97,10 +110,12 @@ original.** No buscamos desarrollar otro firmware que simplemente utilice su
 nombre. La primera etapa ya enlaza módulos originales de SeaBIOS en AArch64,
 pero aún no implementa su POST completo, el arranque de sistemas operativos ni UEFI.
 
-**Estado:** v0.7-dev, compilaciones ARM64 y x86 verificadas; lectura VirtIO,
-initrd experimental y entrega del Device Tree probadas en QEMU 10.0.13
-mediante un programa ARM64 sintético. No se ha arrancado un kernel Linux
-auténtico ni Windows ARM64. Consulta [PHASE3.md](arm64/PHASE3.md).
+**Estado:** v0.9-dev. Las versiones x86 y ARM64 compilan;
+las operaciones de disco `drive_s` y `disk_op_s` ya usan política
+compartida del SeaBIOS original. QEMU ejecuta cargadores diagnósticos
+nativos desde discos legacy MBR/FAT32. No se ha arrancado Linux real
+ni Windows ARM64, ni se implementa UEFI.
+Consulta [PHASE7_BLOCK_CORE.md](arm64/PHASE7_BLOCK_CORE.md).
 
 ---
 
