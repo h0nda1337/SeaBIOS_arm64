@@ -1,0 +1,36 @@
+name: Import shared SeaBIOS POST v1.1
+on:
+  push:
+    branches:
+      - experimental/arm64-postflow-v1.1
+    paths:
+      - bootstrap/postflow-v11.patch
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-postflow-v1.1
+          fetch-depth: 0
+      - name: Validate and import v1.1 source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f bootstrap/postflow-v11.patch ]; then
+            echo "The POST patch has already been imported."
+            exit 0
+          fi
+          git apply --check bootstrap/postflow-v11.patch
+          git apply bootstrap/postflow-v11.patch
+          git rm bootstrap/postflow-v11.patch
+          rmdir bootstrap || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(arm64): share original SeaBIOS POST ordering with x86'
+          git push origin HEAD:experimental/arm64-postflow-v1.1
