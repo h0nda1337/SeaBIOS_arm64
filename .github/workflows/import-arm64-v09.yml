@@ -30,6 +30,8 @@ jobs:
           echo "669c3b5eb93a90f3133888fea26908eb65b143b0fec0d436f7d5583407dbba10  /tmp/v09.patch" | sha256sum -c -
           git apply --check /tmp/v09.patch
           git apply /tmp/v09.patch
+          # Preserve the existing CI workflow: workflow-write scope is unavailable.
+          git restore -- .github/workflows/arm64-v08-qemu-smoke.yml
           rm "$f"
           rmdir bootstrap || true
           git config user.name 'github-actions[bot]'
