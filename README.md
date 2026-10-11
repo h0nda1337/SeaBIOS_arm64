@@ -21,6 +21,19 @@ untrusted disk contents. Synthetic payloads still do not boot Windows ARM64.
 
 See [Phase 5 — shared source](arm64/PHASE5_SHARED_CORE.md).
 
+### Experimental v0.8 — Shared IPL ordering and relocated native PE (No UEFI)
+
+SeaBIOS's original IPL candidate-ordering policy is now factored into
+`src/bootprio.c` and called by **both x86 and AArch64**. On ARM64, the
+legacy MBR/FAT32 loader supports bounded `IMAGE_REL_BASED_DIR64`
+relocations of import-free **native-subsystem** PE32+ ARM64 stages.
+The rebased diagnostic stage passed QEMU VirtIO-MMIO v1/v2 positive and
+corrupt-relocation rejection tests; x86 still builds its 256 KiB BIOS.
+
+This is **not** a Windows ARM64 loader: no genuine Windows boot
+components or real Linux kernel were booted, and there is **no UEFI**.
+See [Phase 6](arm64/PHASE6_BOOTLIST_PE_RELOC.md).
+
 ### Experimental legacy MBR phase — v0.6-dev (No UEFI)
 
 This branch adds a native AArch64 BIOS-like boot path: **active MBR
