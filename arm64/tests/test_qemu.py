@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Optional live QEMU smoke test; fails when QEMU is not installed."""
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -16,21 +17,21 @@ base = [qemu, '-machine', 'virt', '-cpu', 'cortex-a57', '-m', '256M',
         '-bios', str(ROOT / 'out' / 'seabios-arm64.bin')]
 
 for name, suffix, expected in [
-    ('no payload', [], ['SeaBIOS-ARM64 phase 2', 'Device Tree bytes',
+    ('no payload', [], ['SeaBIOS-ARM64 legacy MBR v0.6-dev', 'Device Tree bytes',
                         '[boot] not found', 'halt (WFE)']),
     ('with diagnostic payload', [
         '-device', 'loader,file=' + str(ROOT / 'out' / 'diagnostic-payload.bin')
         + ',addr=0x48000000'],
-        ['SeaBIOS-ARM64 phase 2', 'Device Tree bytes',
+        ['SeaBIOS-ARM64 legacy MBR v0.6-dev', 'Device Tree bytes',
          'valid diagnostic payload', 'CHAINLOAD OK'])
 ]:
     proc = subprocess.Popen(base + suffix, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
+                            stderr=subprocess.STDOUT, start_new_session=True)
     try:
-        log, _ = proc.communicate(timeout=5)
+        log, _ = proc.communicate(timeout=3)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        log, _ = proc.communicate()
+        os.killpg(proc.pid, signal.SIGKILL)
+        log, _ = proc.communicate(timeout=3)
     output = log.decode('utf-8', errors='replace')
     missing = [needle for needle in expected if needle not in output]
     if missing:

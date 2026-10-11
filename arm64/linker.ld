@@ -5,7 +5,7 @@ OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 MEMORY {
     FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 0x00400000
-    RAM   (rwx) : ORIGIN = 0x40200000, LENGTH = 0x00200000
+    RAM   (rwx) : ORIGIN = 0x40200000, LENGTH = 0x00400000
 }
 SECTIONS {
     .text : {
@@ -22,6 +22,7 @@ SECTIONS {
     } > RAM AT> FLASH
     __data_load = LOADADDR(.data);
     .bss (NOLOAD) : {
+        . = ALIGN(16);
         __bss_begin = .;
         *(.bss .bss.* COMMON)
         . = ALIGN(16);

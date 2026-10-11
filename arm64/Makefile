@@ -18,9 +18,10 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
         $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
-        $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o
+        $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
+        $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-disk-test
+.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -79,12 +80,35 @@ $(OUT)/linux-image-diagnostic.bin: $(OUT)/linux-image-diagnostic.elf
 $(OUT)/linux-test-disk.img: $(OUT)/linux-image-diagnostic.bin $(ARM)/tools/create_linux_image_test_disk.py
 	python3 $(ARM)/tools/create_linux_image_test_disk.py $< $@
 
+$(OUT)/legacy-stage.o: $(ARM)/tests/legacy_stage.S | $(OUT)
+	$(CLANG) --target=aarch64-none-elf -c $< -o $@
+
+$(OUT)/legacy-stage.elf: $(OUT)/legacy-stage.o
+	$(LLD) -Ttext=0x49000040 --entry=legacy_stage_start -o $@ $<
+
+$(OUT)/legacy-stage.bin: $(OUT)/legacy-stage.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(OUT)/legacy-pe-stage.obj: $(ARM)/tests/legacy_pe_stage.S | $(OUT)
+	$(CLANG) --target=aarch64-pc-windows-msvc -c $< -o $@
+
+$(OUT)/legacy-pe-stage.exe: $(OUT)/legacy-pe-stage.obj
+	lld-link /machine:arm64 /subsystem:native /entry:pe_native_start \
+	    /base:0x4a000000 /nodefaultlib /opt:ref /out:$@ $<
+
+$(OUT)/legacy-mbr-test-disk.img: $(OUT)/legacy-stage.bin $(ARM)/tools/create_legacy_mbr_disk.py
+	python3 $(ARM)/tools/create_legacy_mbr_disk.py $< $@
+
+qemu-legacy-test: all $(OUT)/legacy-mbr-test-disk.img $(OUT)/legacy-pe-stage.exe
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_legacy.py
+
 run: all
 	$(QEMU) -machine virt -cpu cortex-a57 -m 256M -smp 1 -nographic \
 	    -bios $(OUT)/seabios-arm64.bin \
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_fdt_boot.py
 	python3 $(ARM)/tests/test_fdt.py
 	python3 $(ARM)/tests/test_payload.py
 	python3 $(ARM)/tests/test_linuximage.py

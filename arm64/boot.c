@@ -67,7 +67,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 phase 2 v0.4-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 legacy MBR v0.6-dev (AArch64/QEMU virt)\n");
     arm64_report_cpu();
     arm64_timer_init();
     struct fdt_info info;
@@ -122,6 +122,7 @@ void boot_main(void *dtb)
     }
     arm64_virtio_discover(&info);
     arm64_disk_probe();
+    arm64_legacy_discover(dtb);
     arm64_linux_discover(dtb);
     struct diagnostic_context context = { .info = &info, .dtb = dtb };
     struct arm64_boot_target diagnostic = {
@@ -133,7 +134,7 @@ void boot_main(void *dtb)
     arm64_boot_register(&diagnostic);
     arm64_boot_execute();
 idle:
-    uart_puts("[arm64] halt (WFE). OS/UEFI boot not implemented.\n");
+    uart_puts("[arm64] halt (WFE). Windows ARM64 legacy boot not implemented.\n");
     for (;;)
         __asm__ volatile("wfe");
 }

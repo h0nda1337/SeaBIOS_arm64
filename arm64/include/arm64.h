@@ -59,6 +59,7 @@ int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count);
 uint64_t arm64_virtio_blk_capacity(void);
 void arm64_disk_probe(void);
 void arm64_linux_discover(void *dtb);
+void arm64_legacy_discover(void *dtb);
 int arm64_post_memory(const struct fdt_info *info, const void *dtb);
 int arm64_post_can_load(uint64_t start, uint64_t size);
 void arm64_post_reserve_payload(uint64_t start, uint64_t size);

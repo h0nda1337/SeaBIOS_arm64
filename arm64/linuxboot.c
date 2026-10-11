@@ -3,6 +3,7 @@
 #include "include/linuximage.h"
 #include "include/bootorder.h"
 #include "include/gpt.h"
+#include "include/fdt_boot.h"
 
 /* A minimal direct Linux Image handoff from a raw MBR/GPT Linux partition.
  * This deliberately omits filesystems, EFI, initrd, DTB relocation and
@@ -10,11 +11,16 @@
 #define LINUX_BASE UINT64_C(0x48000000) /* 2 MiB aligned inside QEMU RAM */
 #define LINUX_MBR_PARTITION_TYPE 0x83u
 #define SECTOR_BYTES 512u
+#define INITRD_MBR_PARTITION_TYPE 0xdau /* experimental raw data */
+#define MAX_INITRD_BYTES (16u * 1024u * 1024u)
+#define LINUX_CMDLINE "console=ttyAMA0,115200 earlycon=pl011,mmio32,0x09000000 rdinit=/init"
 static uint8_t Sector[SECTOR_BYTES];
 static uint8_t ReadBatch[SECTOR_BYTES * 16u];
 static uint8_t DiskMBR[SECTOR_BYTES];
 static uint64_t LinuxFirstSector;
 static uint64_t LinuxSectorCount;
+static uint64_t InitrdSector;
+static uint64_t InitrdSectorCount;
 static struct arm64_linux_image LinuxHeader;
 static void *LinuxDtb;
 static struct arm64_boot_target LinuxTarget;
@@ -61,8 +67,57 @@ static int boot_linux_image(void *context)
     /* Kernel bytes written by the bootloader must reach PoC before execute. */
     arm64_cache_clean_range(dst, size);
     arm64_post_reserve_payload(dest, size);
+
+    uint64_t initrd_base = 0, initrd_end = 0;
+    if (InitrdSectorCount) {
+        const uint64_t nbytes = InitrdSectorCount * SECTOR_BYTES;
+        /* Round the placement AFTER the loaded kernel, preventing overlap
+         * even when the Image carries a large text_offset or padding. */
+        if (dest + size > UINT64_MAX - UINT64_C(0x1fffff))
+            return -4;
+        initrd_base = (dest + size + UINT64_C(0x1fffff)) &
+                      ~UINT64_C(0x1fffff);
+        if (!arm64_post_can_load(initrd_base, nbytes)) {
+            uart_puts("[initrd] no safe RAM for raw initrd\n");
+            return -5;
+        }
+        unsigned char *initrd = (unsigned char *)(uintptr_t)initrd_base;
+        for (uint64_t block = 0; block < InitrdSectorCount;) {
+            uint32_t count = (uint32_t)(InitrdSectorCount - block < 16u ?
+                             InitrdSectorCount - block : 16u);
+            if (arm64_virtio_blk_read_many(InitrdSector + block,
+                                           ReadBatch, count)) {
+                uart_puts("[initrd] raw disk read failed\n");
+                return -6;
+            }
+            for (uint32_t i = 0; i < count * SECTOR_BYTES; ++i)
+                initrd[block * SECTOR_BYTES + i] = ReadBatch[i];
+            block += count;
+        }
+        arm64_cache_clean_range(initrd, nbytes);
+        arm64_post_reserve_payload(initrd_base, nbytes);
+        initrd_end = initrd_base + nbytes;
+        uart_puts("[initrd] raw partition loaded at ");
+        uart_hex(initrd_base);
+        uart_puts(" / bytes ");
+        uart_hex(nbytes);
+        uart_newline();
+    }
+    const void *new_dtb = NULL;
+    uint32_t dtb_size = 0;
+    int status = arm64_fdt_prepare(LinuxDtb, LINUX_CMDLINE,
+                                   initrd_base, initrd_end,
+                                   &new_dtb, &dtb_size);
+    if (status || !new_dtb) {
+        uart_puts("[fdt] failed to prepare /chosen, refusing boot\n");
+        return -7;
+    }
+    arm64_cache_clean_range(new_dtb, dtb_size);
+    uart_puts("[fdt] prepared /chosen for Linux: ");
+    uart_hex(dtb_size);
+    uart_newline();
     uart_puts("[linux] Image loaded; entering AArch64 Image entry\n");
-    arm64_handoff((void *)(uintptr_t)dest, LinuxDtb);
+    arm64_handoff((void *)(uintptr_t)dest, (void *)new_dtb);
 }
 
 void arm64_linux_discover(void *dtb)
@@ -72,6 +127,27 @@ void arm64_linux_discover(void *dtb)
         return;
     if (DiskMBR[510] != 0x55 || DiskMBR[511] != 0xaa)
         return;
+    /* Raw initrd format for this experimental loader: an OPTIONAL MBR
+     * partition of type 0xda. This is NOT a filesystem parser and should not
+     * be confused with any standard distro boot protocol. */
+    InitrdSector = InitrdSectorCount = 0;
+    for (unsigned i = 0; i < 4; ++i) {
+        const uint8_t *part = DiskMBR + 446u + i * 16u;
+        if (part[4] != INITRD_MBR_PARTITION_TYPE) continue;
+        uint64_t first = u32le(part + 8u);
+        uint64_t count = u32le(part + 12u);
+        if (first && count && first < disk_sectors &&
+            count <= disk_sectors - first &&
+            count <= MAX_INITRD_BYTES / SECTOR_BYTES) {
+            InitrdSector = first;
+            InitrdSectorCount = count;
+            break;
+        }
+        /* Malformed configured initrd: refuse the candidate instead of
+         * silently booting without the caller-requested initrd. */
+        uart_puts("[initrd] invalid raw initrd partition\n");
+        return;
+    }
     /* Select an explicitly active Linux MBR partition first, then the first
      * other 0x83 partition.  We do not parse extended/protective GPT entries. */
     int chosen = -1;
@@ -96,6 +172,12 @@ void arm64_linux_discover(void *dtb)
         if (arm64_gpt_find_linux(&LinuxFirstSector, &LinuxSectorCount))
             return;
         uart_puts("[gpt] validated Linux partition candidate\n");
+    }
+    if (InitrdSectorCount &&
+        InitrdSector < LinuxFirstSector + LinuxSectorCount &&
+        LinuxFirstSector < InitrdSector + InitrdSectorCount) {
+        uart_puts("[initrd] overlaps raw kernel partition; refusing boot\n");
+        return;
     }
     if (arm64_virtio_blk_read(LinuxFirstSector, Sector))
         return;

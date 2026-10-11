@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """QEMU integration tests for READ-ONLY VirtIO-MMIO, MBR and Image handoff."""
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -20,12 +21,12 @@ DISK = ROOT / 'out/linux-test-disk.img'
 
 def run(args, expected, forbidden=()):
     proc = subprocess.Popen(BASE + args, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
+                            stderr=subprocess.STDOUT, start_new_session=True)
     try:
-        output, _ = proc.communicate(timeout=6)
+        output, _ = proc.communicate(timeout=3)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        output, _ = proc.communicate()
+        os.killpg(proc.pid, signal.SIGKILL)
+        output, _ = proc.communicate(timeout=3)
     text = output.decode(errors='replace')
     missing = [s for s in expected if s not in text]
     unexpected = [s for s in forbidden if s in text]
@@ -78,3 +79,34 @@ for legacy in (True, False):
                            '-device', 'virtio-blk-device,drive=vd0']
             run(args, expected, forbidden)
             print(f'PASS: {mode} VirtIO-MMIO {case} ARM64 Image')
+
+# Phase 3 tests: optional raw initrd loaded and advertised in the new DTB.
+for legacy in (True, False):
+    mode = 'legacy' if legacy else 'modern'
+    opts = [] if legacy else ['-global', 'virtio-mmio.force-legacy=false']
+    with tempfile.TemporaryDirectory() as temp:
+        initrd_disk = Path(temp) / 'initrd.img'
+        bad_initrd = Path(temp) / 'bad-initrd.img'
+        overlap_initrd = Path(temp) / 'overlap-initrd.img'
+        for path, flag in ((initrd_disk, '--initrd'),
+                           (bad_initrd, '--invalid-initrd'),
+                           (overlap_initrd, '--overlap-initrd')):
+            subprocess.run([sys.executable,
+                            str(ROOT / 'tools/create_linux_image_test_disk.py'),
+                            str(IMAGE), str(path), flag], check=True)
+        run(opts + ['-drive', f'if=none,format=raw,readonly=on,file={initrd_disk},id=vd0',
+                    '-device', 'virtio-blk-device,drive=vd0'],
+            ['[initrd] raw partition loaded at',
+             '[fdt] prepared /chosen for Linux',
+             '[linux] SYNTHETIC IMAGE HANDOFF OK (not Linux; tail verified)'])
+        print(f'PASS: {mode} synthetic raw initrd + Linux FDT /chosen')
+        run(opts + ['-drive', f'if=none,format=raw,readonly=on,file={bad_initrd},id=vd0',
+                    '-device', 'virtio-blk-device,drive=vd0'],
+            ['[initrd] invalid raw initrd partition', '[boot] not found'],
+            ('[linux] supported ARM64 Image candidate',))
+        print(f'PASS: {mode} malformed raw initrd rejected')
+        run(opts + ['-drive', f'if=none,format=raw,readonly=on,file={overlap_initrd},id=vd0',
+                    '-device', 'virtio-blk-device,drive=vd0'],
+            ['[initrd] overlaps raw kernel partition; refusing boot', '[boot] not found'],
+            ('[linux] supported ARM64 Image candidate',))
+        print(f'PASS: {mode} overlapping raw initrd rejected')

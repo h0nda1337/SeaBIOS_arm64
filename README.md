@@ -9,6 +9,33 @@ identity: its architecture, boot flow, recognizable C subsystems and original
 x86 build wherever technically possible. ARM64-specific hardware interfaces
 should be isolated behind architecture backends, not silently replace SeaBIOS.
 
+### Experimental legacy MBR phase — v0.6-dev (No UEFI)
+
+This branch adds a native AArch64 BIOS-like boot path: **active MBR
+FAT32 → `/BOOT/ARM64.BIN` or `/BOOT/ARM64.EXE` → native ARM64 second stage**.
+It can load both a custom verified flat container and a strictly limited
+**PE32+ ARM64** image with *native* subsystem, no imports and a fixed image
+base. It rejects EFI-subsystem binaries rather than pretending to execute
+them. Both native payload formats execute in QEMU; 30 legacy-disk QEMU
+scenarios, including malformed inputs, pass on VirtIO-MMIO v1 and v2.
+
+**This does not boot Windows ARM64.** Microsoft's ARM/SoC Windows boot
+contracts require more than MBR, FAT32 or parsing a PE file. This project
+intentionally does not implement UEFI; a Windows ARM64 legacy loader would
+require substantial new, separately researched NT boot support. See
+[Phase 4 — legacy MBR](arm64/PHASE4_LEGACY_MBR.md).
+
+### Experimental Phase 3 — v0.5-dev
+
+The experimental AArch64 loader now reconstructs the FDT `/chosen` node,
+provides a fixed kernel command line, and can pass an optional raw MBR initrd
+from a nonstandard dedicated partition. QEMU legacy and modern VirtIO-MMIO
+regression tests exercise these paths, including corrupt/overlapping input.
+The synthetic Image now rejects an invalid DTB pointer at handoff.
+
+**This does not demonstrate a real Linux kernel boot.** More details:
+[Phase 3](arm64/PHASE3.md).
+
 ### Experimental Phase 2 — v0.4-dev
 
 The AArch64 firmware now cross-compiles and **executes** the original
@@ -35,7 +62,7 @@ make ARCH=arm64 qemu-disk-test
 ```
 
 **Important:** SeaBIOS-ARM64 is not a full BIOS port. There is no complete
-SeaBIOS POST, full boot manager, filesystem loader, UEFI, Windows ARM64 boot,
+SeaBIOS POST, full boot manager, general-purpose filesystem loader, UEFI, Windows ARM64 boot,
 or validated real Linux distribution boot. Never flash it to a physical device.
 
 ### Español
@@ -45,12 +72,13 @@ original.** No buscamos desarrollar otro firmware que simplemente utilice su
 nombre. La primera etapa ya enlaza módulos originales de SeaBIOS en AArch64,
 pero aún no implementa su POST completo, el arranque de sistemas operativos ni UEFI.
 
-**Estado:** v0.4-dev, compilación ARM64 y x86 verificadas; lectura de
-sectores y salto a código ARM64 sintético probados en QEMU 10.0.13.
-Todavía no se ha arrancado un kernel Linux auténtico ni Windows ARM64.
-Consulta [PHASE2.md](arm64/PHASE2.md) para conocer las limitaciones.
+**Estado:** v0.5-dev, compilaciones ARM64 y x86 verificadas; lectura VirtIO,
+initrd experimental y entrega del Device Tree probadas en QEMU 10.0.13
+mediante un programa ARM64 sintético. No se ha arrancado un kernel Linux
+auténtico ni Windows ARM64. Consulta [PHASE3.md](arm64/PHASE3.md).
 
 ---
 
 Upstream SeaBIOS snapshot: `81ec9ec0bcf45df11fb7f98339ec9036b546fca0`.
 Original licenses and third-party notices are retained in the repository.
+

@@ -47,7 +47,7 @@ _start:
 .Lzero:
     cmp     x1, x2
     b.hs    .Lrun
-    strb    wzr, [x1], #1
+    stp     xzr, xzr, [x1], #16
     b       .Lzero
 .Lrun:
     /* QEMU bare-metal boot: DTB is at the beginning of RAM. */
