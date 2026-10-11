@@ -2,7 +2,7 @@ name: Import and verify SeaBIOS ARM64 v1.2 (no UEFI)
 on:
   push:
     branches: [experimental/arm64-devices-v1.2]
-    paths: [bootstrap/arm64-v12.patch.xz.b64]
+    paths: [bootstrap/v12.ready]
   workflow_dispatch:
 permissions:
   contents: write
@@ -19,17 +19,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f bootstrap/arm64-v12.patch.xz.b64 ]; then
+          if [ ! -f bootstrap/v12.ready ]; then
             echo "Patch already applied; no need to repeat"
             exit 0
           fi
-          base64 --decode bootstrap/arm64-v12.patch.xz.b64 > /tmp/arm64-v12.patch.xz
+          cat bootstrap/arm64-v12.part{0,1,2,3} | base64 --decode > /tmp/arm64-v12.patch.xz
           echo '122551c8389b602b67a4c16a1746f481af5314ee9022a357afb3efb5d38a4598  /tmp/arm64-v12.patch.xz' | sha256sum -c -
           xz -dc /tmp/arm64-v12.patch.xz > /tmp/arm64-v12.patch
           echo '804fe80b8ba36522c5d7dde2b8ff39a558a2a32a424a25781f3993f16933fcfa  /tmp/arm64-v12.patch' | sha256sum -c -
           git apply --check /tmp/arm64-v12.patch
           git apply /tmp/arm64-v12.patch
-          rm bootstrap/arm64-v12.patch.xz.b64
+          rm bootstrap/arm64-v12.part{0,1,2,3} bootstrap/v12.ready
           rmdir bootstrap || true
       - name: Install QEMU and compilers
         run: |
