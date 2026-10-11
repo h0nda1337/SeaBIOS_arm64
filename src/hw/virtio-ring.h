@@ -68,7 +68,11 @@ vring_init(struct vring *vr, unsigned int num, unsigned char *queue)
    vr->used = (void*)ALIGN((u32)&vr->avail->ring[num], PAGE_SIZE);
 #endif
 
+#if CONFIG_AARCH64
    unsigned int i;
+#else
+   int i; /* Preserve original SeaBIOS x86 loop type. */
+#endif
    for (i = 0; i < num - 1; i++)
        vr->desc[i].next = i + 1;
    vr->desc[i].next = 0;
