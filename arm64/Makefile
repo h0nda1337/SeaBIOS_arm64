@@ -17,11 +17,11 @@ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/postflow.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
-        $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
+        $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/blockgeom.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
+.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -44,6 +44,9 @@ $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/postflow.o: $(ROOT)/src/postflow.c $(ROOT)/src/postflow.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/blockgeom.o: $(ROOT)/src/blockgeom.c $(ROOT)/src/blockgeom.h $(ROOT)/src/block.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/blockpolicy.o: $(ROOT)/src/blockpolicy.c $(ROOT)/src/blockpolicy.h $(ROOT)/src/block.h | $(OUT)
@@ -133,6 +136,7 @@ run: all
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_blockgeom.py
 	python3 $(ARM)/tests/test_postflow.py
 	python3 $(ARM)/tests/test_blockpolicy.py
 	cd $(ROOT) && python3 -m unittest arm64.tests.test_real_linux_image -v
@@ -145,6 +149,9 @@ test:
 
 qemu-test: all
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu.py
+
+qemu-multidrive-test: all
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_multidrive.py
 
 qemu-disk-test: all $(OUT)/linux-test-disk.img
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_disk.py

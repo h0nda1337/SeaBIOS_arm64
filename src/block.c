@@ -8,6 +8,7 @@
 #include "biosvar.h" // GET_GLOBAL
 #include "block.h" // process_op
 #include "blockpolicy.h" // shared request policy
+#include "blockgeom.h" // shared SeaBIOS CHS translation
 #include "hw/ata.h" // process_ata_op
 #include "hw/ahci.h" // process_ahci_op
 #include "hw/esp-scsi.h" // esp_scsi_process_op
@@ -108,87 +109,19 @@ get_translation(struct drive_s *drive)
     return TRANSLATION_LBA;
 }
 
+/* The original CHS geometry algorithm is shared with AArch64 in
+ * src/blockgeom.c. x86 retains translation policy and FDPT/BDA mapping. */
 static void
 setup_translation(struct drive_s *drive)
 {
     u8 translation = get_translation(drive);
-    drive->translation = translation;
-
-    u16 heads = drive->pchs.head ;
-    u16 cylinders = drive->pchs.cylinder;
-    u16 spt = drive->pchs.sector;
-    u64 sectors = drive->sectors;
-    const char *desc = NULL;
-
-    switch (translation) {
-    default:
-    case TRANSLATION_NONE:
-        desc = "none";
-        break;
-    case TRANSLATION_LBA:
-        desc = "lba";
-        spt = 63;
-        if (sectors > 63*255*1024) {
-            heads = 255;
-            cylinders = 1024;
-            break;
-        }
-        u32 sect = (u32)sectors / 63;
-        heads = sect / 1024;
-        if (heads>128)
-            heads = 255;
-        else if (heads>64)
-            heads = 128;
-        else if (heads>32)
-            heads = 64;
-        else if (heads>16)
-            heads = 32;
-        else
-            heads = 16;
-        cylinders = sect / heads;
-        break;
-    case TRANSLATION_RECHS:
-        desc = "r-echs";
-        // Take care not to overflow
-        if (heads==16) {
-            if (cylinders>61439)
-                cylinders=61439;
-            heads=15;
-            cylinders = (u16)((u32)(cylinders)*16/15);
-        }
-        // then go through the large bitshift process
-    case TRANSLATION_LARGE:
-        if (translation == TRANSLATION_LARGE)
-            desc = "large";
-        while (cylinders > 1024) {
-            cylinders >>= 1;
-            heads <<= 1;
-
-            // If we max out the head count
-            if (heads > 127)
-                break;
-        }
-        break;
-    case TRANSLATION_HOST:
-        desc = "host-supplied";
-        cylinders = drive->lchs.cylinder;
-        heads = drive->lchs.head;
-        spt = drive->lchs.sector;
-        break;
-    }
-    // clip to 1024 cylinders in lchs
-    if (cylinders > 1024)
-        cylinders = 1024;
+    blockgeom_translate(drive, translation);
     dprintf(1, "drive %p: PCHS=%u/%d/%d translation=%s LCHS=%d/%d/%d s=%u\n"
             , drive
             , drive->pchs.cylinder, drive->pchs.head, drive->pchs.sector
-            , desc
-            , cylinders, heads, spt
-            , (u32)sectors);
-
-    drive->lchs.head = heads;
-    drive->lchs.cylinder = cylinders;
-    drive->lchs.sector = spt;
+            , blockgeom_translation_name(translation)
+            , drive->lchs.cylinder, drive->lchs.head, drive->lchs.sector
+            , (u32)drive->sectors);
 }
 
 

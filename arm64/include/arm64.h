@@ -55,6 +55,11 @@ uint64_t arm64_timer_deadline_ms(uint32_t millis);
 int arm64_timer_expired(uint64_t deadline);
 void arm64_virtio_discover(const struct fdt_info *info);
 int arm64_virtio_blk_read(uint64_t lba, void *out);
+uint32_t arm64_virtio_blk_count(void);
+uint64_t arm64_virtio_blk_capacity_at(uint32_t index);
+uintptr_t arm64_virtio_blk_mmio_at(uint32_t index);
+int arm64_virtio_blk_read_many_at(uint32_t index, uint64_t lba,
+                                  void *out, uint32_t count);
 int arm64_virtio_blk_read_many(uint64_t lba, void *out, uint32_t count);
 uint64_t arm64_virtio_blk_capacity(void);
 uintptr_t arm64_virtio_blk_mmio(void);

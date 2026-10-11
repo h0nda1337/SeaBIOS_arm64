@@ -46,14 +46,22 @@
 /* Bounded polling is necessary until PSCI timers and IRQ/GIC exist. */
 #define WAIT_SPINS          5000000u
 
-static uintptr_t BlockBase;
-static uint64_t BlockSectors;
-static struct vring_virtqueue BlockQueue __attribute__((aligned(4096)));
-static struct vp_device Transport;
-static struct virtio_blk_outhdr Request __attribute__((aligned(16)));
-static uint8_t StatusByte;
-static uint8_t Transfer[SECTOR_SIZE * MAX_READ_SECTORS]
-    __attribute__((aligned(16)));
+/* Independent split rings per device, not one global VirtIO context.
+ * The same upstream SeaBIOS ring implementation is used for every disk. */
+#define ARM64_MAX_BLOCK_DRIVES 4u
+struct arm64_block_device {
+    uintptr_t base;
+    uint64_t sectors;
+    struct vring_virtqueue queue __attribute__((aligned(4096)));
+    struct vp_device transport;
+    struct virtio_blk_outhdr request __attribute__((aligned(16)));
+    uint8_t status;
+    uint8_t transfer[SECTOR_SIZE * MAX_READ_SECTORS]
+        __attribute__((aligned(16)));
+};
+static struct arm64_block_device BlockDevs[ARM64_MAX_BLOCK_DRIVES]
+    __attribute__((aligned(4096)));
+static uint32_t BlockCount;
 
 
 void arm64_virtio_barrier(void)
@@ -90,9 +98,16 @@ void arm64_virtio_panic(void)
 static int block_init(uintptr_t base)
 {
     uint32_t version = rd(base, MMIO_VERSION);
-    if (BlockBase || (version != 1u && version != 2u) ||
+    if (BlockCount >= ARM64_MAX_BLOCK_DRIVES ||
+        (version != 1u && version != 2u) ||
         rd(base, MMIO_DEVICE_ID) != VIRTIO_BLK_ID)
         return -1;
+    struct arm64_block_device *dev = &BlockDevs[BlockCount];
+    struct vring_virtqueue *vq = &dev->queue;
+    /* A failed negotiation must not leak ring indices into the next probe. */
+    uint8_t *raw = (uint8_t *)vq;
+    for (uint32_t i = 0; i < sizeof(*vq); ++i)
+        raw[i] = 0;
     wr(base, MMIO_STATUS, 0u);
     arm64_virtio_barrier();
     wr(base, MMIO_STATUS, VIRTIO_CONFIG_S_ACKNOWLEDGE |
@@ -119,24 +134,24 @@ static int block_init(uintptr_t base)
     if (rd(base, MMIO_QUEUE_NUM_MAX) < VIRTQ_SIZE)
         goto error;
     wr(base, MMIO_QUEUE_NUM, VIRTQ_SIZE);
-    vring_init(&BlockQueue.vring, VIRTQ_SIZE, BlockQueue.queue);
-    BlockQueue.free_head = 0;
-    BlockQueue.last_used_idx = 0;
+    vring_init(&vq->vring, VIRTQ_SIZE, vq->queue);
+    vq->free_head = 0;
+    vq->last_used_idx = 0;
     if (version == 2u) {
         if (rd(base, MMIO_QUEUE_READY))
             goto error;
         wraddr(base, MMIO_QUEUE_DESC_LO,
-               (uintptr_t)BlockQueue.vring.desc);
+               (uintptr_t)vq->vring.desc);
         wraddr(base, MMIO_QUEUE_DRV_LO,
-               (uintptr_t)BlockQueue.vring.avail);
+               (uintptr_t)vq->vring.avail);
         wraddr(base, MMIO_QUEUE_DEV_LO,
-               (uintptr_t)BlockQueue.vring.used);
+               (uintptr_t)vq->vring.used);
         arm64_virtio_barrier();
         wr(base, MMIO_QUEUE_READY, 1u);
         if (!rd(base, MMIO_QUEUE_READY))
             goto error;
     } else {
-        uintptr_t addr = (uintptr_t)BlockQueue.vring.desc;
+        uintptr_t addr = (uintptr_t)vq->vring.desc;
         if (addr > UINT32_MAX || (addr & 4095u))
             goto error;
         wr(base, MMIO_GUEST_PAGE_SIZE, 4096u);
@@ -157,67 +172,93 @@ static int block_init(uintptr_t base)
                           VIRTIO_CONFIG_S_DRIVER_OK);
     if (!(rd(base, MMIO_STATUS) & VIRTIO_CONFIG_S_DRIVER_OK))
         goto error;
-    BlockBase = base;
-    BlockSectors = sectors;
-    Transport.mmio = base;
+    dev->base = base;
+    dev->sectors = sectors;
+    dev->transport.mmio = base;
+    ++BlockCount;
     return 0;
 error:
     wr(base, MMIO_STATUS, rd(base, MMIO_STATUS) | VIRTIO_CONFIG_S_FAILED);
     return -1;
 }
 
-/* One in-flight request. The original SeaBIOS virtio_blk_outhdr and
- * vring_desc are shared, while AArch64 requires its own transport routines. */
-int arm64_virtio_blk_read_many_transport(uint64_t lba, void *out, uint32_t count)
+/* One in-flight request per disk, independent VirtIO split rings.
+ * The original SeaBIOS virtio_blk_outhdr and vring implementation remain. */
+int arm64_virtio_blk_read_many_transport_at(uint32_t index, uint64_t lba,
+                                            void *out, uint32_t count)
 {
-    if (!BlockBase || !out || !count || count > MAX_READ_SECTORS ||
-        lba >= BlockSectors || count > BlockSectors - lba)
+    if (index >= BlockCount || !out || !count ||
+        count > MAX_READ_SECTORS)
         return -1;
-    Request.type = VIRTIO_BLK_T_IN;
-    Request.ioprio = 0;
-    Request.sector = lba;
-    StatusByte = 0xffu;
+    struct arm64_block_device *dev = &BlockDevs[index];
+    if (!dev->base || lba >= dev->sectors || count > dev->sectors - lba)
+        return -1;
+    dev->request.type = VIRTIO_BLK_T_IN;
+    dev->request.ioprio = 0;
+    dev->request.sector = lba;
+    dev->status = 0xffu;
     struct vring_list sg[] = {
-        { (char *)&Request, sizeof(Request) },
-        { (char *)Transfer, SECTOR_SIZE * count },
-        { (char *)&StatusByte, 1 },
+        { (char *)&dev->request, sizeof(dev->request) },
+        { (char *)dev->transfer, SECTOR_SIZE * count },
+        { (char *)&dev->status, 1 },
     };
-    /* Reuse original upstream SeaBIOS descriptor-chain implementation. */
-    vring_add_buf(&BlockQueue, sg, 1, 2, 0, 0);
-    vring_kick(&Transport, &BlockQueue, 1);
+    vring_add_buf(&dev->queue, sg, 1, 2, 0, 0);
+    vring_kick(&dev->transport, &dev->queue, 1);
     uint32_t spins = WAIT_SPINS;
     uint64_t deadline = arm64_timer_deadline_ms(2000);
-    while (!vring_more_used(&BlockQueue) && spins--) {
+    while (!vring_more_used(&dev->queue) && spins--) {
         if (arm64_timer_expired(deadline)) break;
         __asm__ volatile("yield" ::: "memory");
     }
     arm64_virtio_barrier();
-    if (!vring_more_used(&BlockQueue) ||
-        BlockQueue.vring.used->ring[BlockQueue.last_used_idx % VIRTQ_SIZE].id
-           >= VIRTQ_SIZE ||
-        BlockQueue.vring.used->ring[BlockQueue.last_used_idx % VIRTQ_SIZE].len
-           < SECTOR_SIZE * count + 1 || StatusByte != VIRTIO_BLK_S_OK) {
-        wr(BlockBase, MMIO_STATUS, 0);
-        BlockBase = 0;
+    struct vring_virtqueue *q = &dev->queue;
+    if (!vring_more_used(q) ||
+        q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].id >= VIRTQ_SIZE ||
+        q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].len
+            < SECTOR_SIZE * count + 1 || dev->status != VIRTIO_BLK_S_OK) {
+        wr(dev->base, MMIO_STATUS, 0);
+        dev->base = 0;
         return -2;
     }
-    vring_get_buf(&BlockQueue, NULL);
-    uint32_t irq = rd(BlockBase, MMIO_INT_STATUS);
-    if (irq) wr(BlockBase, MMIO_INT_ACK, irq);
+    vring_get_buf(q, NULL);
+    uint32_t irq = rd(dev->base, MMIO_INT_STATUS);
+    if (irq) wr(dev->base, MMIO_INT_ACK, irq);
     uint8_t *dst = out;
-    for (unsigned i = 0; i < SECTOR_SIZE * count; i++)
-        dst[i] = Transfer[i];
+    for (uint32_t i = 0; i < SECTOR_SIZE * count; i++)
+        dst[i] = dev->transfer[i];
     return 0;
+}
+
+int arm64_virtio_blk_read_many_transport(uint64_t lba, void *out,
+                                        uint32_t count)
+{
+    return arm64_virtio_blk_read_many_transport_at(0, lba, out, count);
+}
+
+uint32_t arm64_virtio_blk_count(void)
+{
+    return BlockCount;
+}
+
+uintptr_t arm64_virtio_blk_mmio_at(uint32_t index)
+{
+    return index < BlockCount ? BlockDevs[index].base : 0;
+}
+
+uint64_t arm64_virtio_blk_capacity_at(uint32_t index)
+{
+    return index < BlockCount && BlockDevs[index].base
+        ? BlockDevs[index].sectors : 0;
 }
 
 uintptr_t arm64_virtio_blk_mmio(void)
 {
-    return BlockBase;
+    return arm64_virtio_blk_mmio_at(0);
 }
 
 uint64_t arm64_virtio_blk_capacity(void)
 {
-    return BlockBase ? BlockSectors : 0;
+    return arm64_virtio_blk_capacity_at(0);
 }
 
 void arm64_virtio_discover(const struct fdt_info *info)
@@ -247,10 +288,16 @@ void arm64_virtio_discover(const struct fdt_info *info)
         uart_puts(" vendor: ");
         uart_hex(vendor);
         uart_newline();
-        if (device == VIRTIO_BLK_ID && !BlockBase) {
+        if (device == VIRTIO_BLK_ID &&
+            BlockCount < ARM64_MAX_BLOCK_DRIVES) {
             if (!block_init(base)) {
+                uart_puts("[virtio-blk] registered disk ");
+                uart_dec(BlockCount - 1);
+                uart_puts(", sectors: ");
+                uart_hex(BlockDevs[BlockCount - 1].sectors);
+                uart_newline();
                 uart_puts("[virtio-blk] ready, sectors: ");
-                uart_hex(BlockSectors);
+                uart_hex(BlockDevs[BlockCount - 1].sectors);
                 uart_newline();
             } else {
                 uart_puts("[virtio-blk] unsupported or initialization failed\n");
