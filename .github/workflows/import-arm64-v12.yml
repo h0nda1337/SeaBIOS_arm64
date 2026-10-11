@@ -1,0 +1,102 @@
+name: Import and verify SeaBIOS ARM64 v1.2 (no UEFI)
+on:
+  push:
+    branches: [experimental/arm64-devices-v1.2]
+    paths: [bootstrap/arm64-v12.patch.xz.b64]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-devices-v1.2
+          fetch-depth: 0
+      - name: Verify and apply exact v1.1-to-v1.2 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f bootstrap/arm64-v12.patch.xz.b64 ]; then
+            echo "Patch already applied; no need to repeat"
+            exit 0
+          fi
+          base64 --decode bootstrap/arm64-v12.patch.xz.b64 > /tmp/arm64-v12.patch.xz
+          echo '122551c8389b602b67a4c16a1746f481af5314ee9022a357afb3efb5d38a4598  /tmp/arm64-v12.patch.xz' | sha256sum -c -
+          xz -dc /tmp/arm64-v12.patch.xz > /tmp/arm64-v12.patch
+          echo '804fe80b8ba36522c5d7dde2b8ff39a558a2a32a424a25781f3993f16933fcfa  /tmp/arm64-v12.patch' | sha256sum -c -
+          git apply --check /tmp/arm64-v12.patch
+          git apply /tmp/arm64-v12.patch
+          rm bootstrap/arm64-v12.patch.xz.b64
+          rmdir bootstrap || true
+      - name: Install QEMU and compilers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make gcc
+      - name: Compile ARM64 and run host / dual-disk tests
+        run: |
+          make ARCH=arm64 -j2
+          make ARCH=arm64 test
+          make ARCH=arm64 qemu-test
+          make ARCH=arm64 qemu-multidrive-test
+          make ARCH=arm64 qemu-bootorder-test
+          make ARCH=arm64 qemu-reloc-test
+      - name: Build original x86 SeaBIOS
+        run: |
+          make -j2
+          test "$(stat -c%s out/bios.bin)" -eq 262144
+      - name: Publish tested sources to experimental branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/arm64-v12.patch ]; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(arm64): register multiple VirtIO drives and share SeaBIOS CHS geometry'
+          git push origin HEAD:experimental/arm64-devices-v1.2
+  real-linux-regression:
+    runs-on: ubuntu-24.04
+    needs: import-and-test
+    timeout-minutes: 25
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experimental/arm64-devices-v1.2
+      - name: Install toolchains and QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make
+      - name: Build firmware
+        run: make ARCH=arm64 -j2
+      - name: Fetch genuine ARM64 Linux Image (Debian)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/debian-arm64-kernel.deb 'https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-image-6.12.111%2Bdeb13-cloud-arm64-unsigned_6.12.111-1_arm64.deb'
+          test "$(dpkg-deb --field /tmp/debian-arm64-kernel.deb Architecture)" = arm64
+          dpkg-deb -x /tmp/debian-arm64-kernel.deb /tmp/linux-arm64
+          python3 - <<'PY'
+          import gzip
+          from pathlib import Path
+          files = list(Path('/tmp/linux-arm64/boot').glob('vmlinuz-*'))
+          assert len(files)==1, files
+          image=files[0].read_bytes()
+          if image.startswith(b'\x1f\x8b'): image=gzip.decompress(image)
+          assert len(image)>512 and image[0x38:0x3c]==b'ARM\x64'
+          Path('/tmp/real-linux-Image').write_bytes(image)
+          PY
+      - name: Real Linux ARM64 via MBR / VirtIO v1
+        run: python3 arm64/tests/test_qemu_real_linux.py --image /tmp/real-linux-Image --timeout 100 --log /tmp/linux-v1.log
+      - name: Real Linux ARM64 via MBR / VirtIO v2
+        run: python3 arm64/tests/test_qemu_real_linux.py --image /tmp/real-linux-Image --timeout 100 --modern-virtio --log /tmp/linux-v2.log
+      - name: Save boot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seabios-arm64-v12-linux-logs
+          path: /tmp/linux-v*.log
+          if-no-files-found: ignore
