@@ -2,6 +2,21 @@
 
 ## SeaBIOS-ARM64
 
+### v1.2-dev — multi-drive SeaBIOS registry, shared x86/ARM64 CHS geometry
+
+AArch64 now registers up to **four** independent read-only VirtIO-MMIO drives,
+each backed by a separate split ring and an original SeaBIOS `drive_s`.
+The actual geometry translation algorithm from `src/block.c` lives in
+`src/blockgeom.c` and is compiled for **both x86 and ARM64**. QEMU smoke
+tests verified two distinct drives under VirtIO-MMIO v1 and v2, and the
+original x86 256 KiB BIOS still compiles.
+
+The preexisting MBR/FAT32 and raw Linux Image boot paths still use **disk 0**.
+Recognizing multiple drives does **not** yet mean booting arbitrary drives.
+No UEFI or Windows ARM64 boot has been implemented. See
+[Phase 9 — multiple drives](arm64/PHASE9_MULTIDRIVE.md).
+
+
 ### v1.0 experimental — real Linux ARM64 boot from legacy MBR, no UEFI
 
 **Milestone achieved:** our native AArch64 firmware loads an authentic Debian
