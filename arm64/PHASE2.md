@@ -78,6 +78,21 @@ SeaBIOS-ARM64 phase 2 v0.4-dev (AArch64/QEMU virt)
 The test runner kills QEMU when firmware yields (`WFE`). This is expected,
 not a sign that a real OS returned successfully.
 
+## Additional QEMU CPU coverage
+
+A supplementary QEMU 10.0.13 / TCG smoke matrix verified **6/6** synthetic
+ARM64 Image handoffs using the modern VirtIO-MMIO transport:
+
+| QEMU CPU | Synthetic MBR Image | Synthetic GPT Image |
+| --- | --- | --- |
+| `cortex-a57` | PASS | PASS |
+| `cortex-a72` | PASS | PASS |
+| `max` | PASS | PASS |
+
+Each successful case verified the final byte of a 16 KiB synthetic Image
+loaded by two separate 8 KiB VirtIO reads. These are emulator tests only;
+they do **not** establish that a real Linux kernel or hardware board can boot.
+
 ## Deliberate restrictions
 
 - **No Linux distribution boot has been verified.** The loader has no initrd,
