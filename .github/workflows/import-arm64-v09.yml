@@ -25,7 +25,7 @@ jobs:
             echo "Source patch already imported."
             exit 0
           fi
-          echo "614782573d4f1eac433319c7b0c78de5a77d2284bf168100dac277167cf2a886  $f" | sha256sum -c -
+          echo "39621c5e0fa7a6f3efb306cb98f57b1ec2d4898d9355600b04b48a68ffb4762d  $f" | sha256sum -c -
           base64 --decode "$f" | xz -d > /tmp/v09.patch
           echo "669c3b5eb93a90f3133888fea26908eb65b143b0fec0d436f7d5583407dbba10  /tmp/v09.patch" | sha256sum -c -
           git apply --check /tmp/v09.patch
