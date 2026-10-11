@@ -1,0 +1,614 @@
+diff --git a/.github/workflows/arm64-v11-verify.yml b/.github/workflows/arm64-v11-verify.yml
+new file mode 100644
+index 0000000..809030a
+--- /dev/null
++++ b/.github/workflows/arm64-v11-verify.yml
+@@ -0,0 +1,77 @@
++name: SeaBIOS ARM64 v1.1 shared POST and real Linux (no UEFI)
++on:
++  push:
++    branches:
++      - experimental/arm64-postflow-v1.1
++  workflow_dispatch:
++permissions:
++  contents: read
++jobs:
++  builds-and-smoke:
++    runs-on: ubuntu-24.04
++    timeout-minutes: 20
++    steps:
++      - uses: actions/checkout@v4
++      - name: Install toolchains and ARM64 QEMU
++        run: |
++          sudo apt-get update -qq
++          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make gcc
++      - name: Cross-compile AArch64 and exercise common POST
++        run: |
++          make ARCH=arm64 -j2
++          make ARCH=arm64 test
++          make ARCH=arm64 qemu-test
++          make ARCH=arm64 qemu-bootorder-test
++      - name: Build original x86 SeaBIOS
++        run: make -j2
++  real-linux-mbr:
++    runs-on: ubuntu-24.04
++    needs: builds-and-smoke
++    timeout-minutes: 25
++    steps:
++      - uses: actions/checkout@v4
++      - name: Install toolchains and ARM64 QEMU
++        run: |
++          sudo apt-get update -qq
++          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3 make
++      - name: Cross-compile AArch64
++        run: make ARCH=arm64 -j2
++      - name: Fetch authentic Debian ARM64 Linux Image
++        shell: bash
++        run: |
++          set -euo pipefail
++          curl -fL --retry 3 -o /tmp/debian-arm64-kernel.deb \
++            'https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-image-6.12.111%2Bdeb13-cloud-arm64-unsigned_6.12.111-1_arm64.deb'
++          test "$(dpkg-deb --field /tmp/debian-arm64-kernel.deb Architecture)" = arm64
++          dpkg-deb -x /tmp/debian-arm64-kernel.deb /tmp/linux-arm64
++          python3 - <<'PY'
++          import gzip
++          from pathlib import Path
++          files = sorted(Path('/tmp/linux-arm64/boot').glob('vmlinuz-*'))
++          if len(files) != 1:
++              raise SystemExit(f'Expected 1 kernel: {files}')
++          image = files[0].read_bytes()
++          if image.startswith(b'\x1f\x8b'):
++              image = gzip.decompress(image)
++          if len(image) < 512 or image[0x38:0x3c] != b'ARM\x64':
++              raise SystemExit('Kernel is not an AArch64 uncompressed Image')
++          Path('/tmp/real-linux-Image').write_bytes(image)
++          print('Authentic AArch64 kernel:', len(image), 'bytes')
++          PY
++      - name: Boot Linux from MBR / VirtIO v1
++        run: |
++          python3 arm64/tests/test_qemu_real_linux.py \
++            --image /tmp/real-linux-Image --timeout 100 \
++            --log /tmp/linux-legacy-v1.log
++      - name: Boot Linux from MBR / VirtIO v2
++        run: |
++          python3 arm64/tests/test_qemu_real_linux.py \
++            --image /tmp/real-linux-Image --timeout 100 \
++            --modern-virtio --log /tmp/linux-legacy-v2.log
++      - name: Upload serial logs
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: seabios-arm64-v11-real-linux-logs
++          path: /tmp/linux-legacy-v*.log
++          if-no-files-found: ignore
+diff --git a/Makefile b/Makefile
+index 9ce4390..94768f7 100644
+--- a/Makefile
++++ b/Makefile
+@@ -42,7 +42,7 @@ SRCBOTH=misc.c stacks.c output.c string.c block.c blockpolicy.c cdrom.c disk.c	\
+     hw/ramdisk.c hw/lsi-scsi.c hw/esp-scsi.c hw/megasas.c		\
+     hw/mpt-scsi.c
+ SRC16=$(SRCBOTH)
+-SRC32FLAT=$(SRCBOTH) post.c e820map.c malloc.c romfile.c x86.c		\
++SRC32FLAT=$(SRCBOTH) post.c postflow.c e820map.c malloc.c romfile.c x86.c		\
+     optionroms.c pmm.c font.c boot.c bootprio.c bootsplash.c jpeg.c bmp.c		\
+     tcgbios.c sha1.c hw/pcidevice.c hw/ahci.c hw/pvscsi.c		\
+     hw/usb-xhci.c hw/usb-hub.c hw/sdcard.c fw/coreboot.c		\
+diff --git a/arm64/Makefile b/arm64/Makefile
+index 7869484..9aaca65 100644
+--- a/arm64/Makefile
++++ b/arm64/Makefile
+@@ -14,7 +14,7 @@ CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -mgeneral-regs
+ # incremental step toward shared subsystems; this is not the full POST port.
+ CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src
+ OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
+-        $(OUT)/post.o $(OUT)/bootorder.o $(OUT)/string.o \
++        $(OUT)/post.o $(OUT)/postflow.o $(OUT)/bootorder.o $(OUT)/string.o \
+         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
+         $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
+         $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
+@@ -43,6 +43,9 @@ $(OUT)/e820map.o: $(ROOT)/src/e820map.c $(ROOT)/src/e820map.h \
+                     $(ROOT)/src/types.h $(ARM)/include/seabios_compat.h | $(OUT)
+ 	$(CLANG) $(CFLAGS) -c $< -o $@
+ 
++$(OUT)/postflow.o: $(ROOT)/src/postflow.c $(ROOT)/src/postflow.h | $(OUT)
++	$(CLANG) $(CFLAGS) -c $< -o $@
++
+ $(OUT)/blockpolicy.o: $(ROOT)/src/blockpolicy.c $(ROOT)/src/blockpolicy.h $(ROOT)/src/block.h | $(OUT)
+ 	$(CLANG) $(CFLAGS) -c $< -o $@
+ 
+@@ -130,6 +133,7 @@ run: all
+ 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
+ 
+ test:
++	python3 $(ARM)/tests/test_postflow.py
+ 	python3 $(ARM)/tests/test_blockpolicy.py
+ 	cd $(ROOT) && python3 -m unittest arm64.tests.test_real_linux_image -v
+ 	python3 $(ARM)/tests/test_shared_core.py
+diff --git a/arm64/PHASE8_POSTFLOW.md b/arm64/PHASE8_POSTFLOW.md
+new file mode 100644
+index 0000000..5ebb713
+--- /dev/null
++++ b/arm64/PHASE8_POSTFLOW.md
+@@ -0,0 +1,57 @@
++# Phase 8 — genuine SeaBIOS POST sequencing shared with ARM64
++
++**v1.1 experimental. Not a complete ARM64 SeaBIOS runtime. No UEFI.**
++
++## Change from v1.0
++
++The x86 SeaBIOS POST used to sequence its hardware and interface setup
++within `src/post.c::maininit()`. The same ten-stage order is now implemented
++by **`src/postflow.c::postflow_run()`**, which is compiled into *both* the
++original x86 BIOS and the native AArch64 firmware.
++
++The x86 `maininit()` invokes that function with callbacks that preserve the
++original ordering and original operations (IVT/BDA, PIC, timers, VGA ROM,
++option ROMs, boot menu, `prepareboot()`, BIOS readonly, INT19). The ARM64
++boot path invokes **the same function** after validating the QEMU Device Tree,
++using native callbacks for E820-style internal RAM map, fw_cfg/ROM files,
++VirtIO-MMIO device discovery, legacy MBR/Linux targets, and handoff.
++
++| Stage | x86 backend | ARM64 backend |
++| --- | --- | --- |
++| Interface | malloc, ROM files, IVT, BDA | FDT memory reservations + original E820 map |
++| Platform | PIC, QEMU/coreboot, clock, TPM | MMIO fw_cfg + original romfile |
++| Async devices | Threads, if configured | Intentionally omitted (no IRQ scheduler) |
++| Video | VGA/serial and option ROM | PL011 already initialized in early setup |
++| Sync devices | USB/PS2/block/serial | VirtIO-MMIO block discovery, MBR/GPT probing |
++| Option ROMs | Execute x86 option ROMs | Intentionally omitted |
++| Boot menu | Interactive BIOS menu | Register ARM64 diagnostic fallback |
++| Prepare | BCV, finalize BIOS tables | Loaders check and reserve ranges |
++| Protect | Make BIOS read-only | Intentionally omitted (MMU/flash protection TODO) |
++| Boot | x86 INT 19h | Original shared IPL policy + native ARM64 handoff |
++
++The new `postflow_run()` supports *fail-fast*: any failed callback aborts
++without entering later stages, and it reports the failed stage to the caller.
++The independent C host test compiles the **same `src/postflow.c`** and checks
++stage order, all 10 failure boundaries, and invalid operation callbacks.
++
++## Verification performed locally
++
++- AArch64 firmware compiled successfully (Clang + LLD).
++- Original SeaBIOS x86 compiled successfully; `out/bios.bin` remains 256 KiB.
++- ARM64 QEMU 10.0.13 `virt`: diagnostic no-payload and payload passed.
++- QEMU bootorder with VirtIO-MMIO v1 and v2 passed.
++- Selected legacy MBR/FAT32 and SHA-256 corruption scenarios passed.
++- Entire host test suite passed, including the new POST sequencing test.
++- Legacy 34-case QEMU suite was interrupted by a test execution time limit,
++  so its last result is **not** counted as complete (tested separately).
++
++## Still missing
++
++This does **not** execute x86 `src/post.c` literally on ARM64, implement
++16-bit BIOS calls, port VGA/PCI/USB/PS2 BIOS hardware initialization, provide
++Windows ARM64 boot, or offer UEFI. A full x86 runtime regression test is also
++pending (the x86 build, not the x86 runtime, was verified).
++
++The previously demonstrated Linux MBR boot can be checked again on CI with
++the new `arm64-v11-verify.yml` workflow, which fetches an authentic ARM64
++Linux Image rather than relying on synthetic code.
+diff --git a/arm64/boot.c b/arm64/boot.c
+index bf5a442..4e583fe 100644
+--- a/arm64/boot.c
++++ b/arm64/boot.c
+@@ -2,6 +2,7 @@
+ #include "include/arm64.h"
+ #include "include/bootorder.h"
+ #include "include/fwcfg.h"
++#include "../src/postflow.h"
+ 
+ /* ARM64 staging firmware - not yet a UEFI or legacy BIOS implementation. */
+ #define PAYLOAD_MAGIC "SBARMP01"
+@@ -63,6 +64,89 @@ static int try_payload(void *context)
+     arm64_handoff((void *)code, dtb);
+ }
+ 
++struct arm64_post_context {
++    struct fdt_info *info;
++    void *dtb;
++    struct diagnostic_context *diagnostic;
++    struct arm64_boot_target diagnostic_target;
++};
++
++/* Architecture-specific POST operations. The order is defined by the
++ * genuine shared SeaBIOS src/postflow.c, not a second ARM-only scheduler. */
++static int arm64_post_step(void *opaque, enum postflow_stage stage)
++{
++    struct arm64_post_context *ctx = opaque;
++    struct fdt_info *info = ctx->info;
++    switch (stage) {
++    case POSTFLOW_INTERFACE:
++        if (arm64_post_memory(info, ctx->dtb))
++            return -1;
++        return 0;
++    case POSTFLOW_PLATFORM:
++        if (info->has_fwcfg) {
++            uart_puts("[arm64] QEMU fw_cfg MMIO: ");
++            uart_hex(info->fwcfg_base);
++            uart_newline();
++            int found = arm64_fwcfg_init(info->fwcfg_base);
++            if (found >= 0)
++                arm64_fwcfg_report();
++            else {
++                uart_puts("[arm64] fw_cfg initialization rejected: ");
++                uart_dec((uint32_t)(-found));
++                uart_newline();
++            }
++        } else {
++            uart_puts("[arm64] no fw_cfg node in Device Tree\n");
++        }
++        return 0;
++    case POSTFLOW_ASYNC_DEVICES:
++        /* No threaded device setup until the ARM IRQ/scheduler is ported. */
++        return 0;
++    case POSTFLOW_VIDEO:
++        /* No x86 VGA option ROMs on AArch64; PL011 was initialized early. */
++        return 0;
++    case POSTFLOW_SYNC_DEVICES: {
++        arm64_virtio_discover(info);
++        /* QEMU bootorder uses the exact VirtIO-MMIO legacy path format. */
++        static char boot_mmio_path[] = "/virtio-mmio@0000000000000000/*";
++        uintptr_t disk_mmio = arm64_virtio_blk_mmio();
++        if (disk_mmio) {
++            static const char hex[] = "0123456789abcdef";
++            for (int i = 0; i < 16; ++i)
++                boot_mmio_path[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
++            arm64_boot_set_disk_path(boot_mmio_path);
++        }
++        arm64_disk_probe();
++        arm64_legacy_discover(ctx->dtb);
++        arm64_linux_discover(ctx->dtb);
++        return 0;
++    }
++    case POSTFLOW_OPTIONROMS:
++        /* Native ARM64 legacy boot does not execute x86 PCI option ROMs. */
++        return 0;
++    case POSTFLOW_BOOTMENU:
++        ctx->diagnostic_target.priority = 10;
++        ctx->diagnostic_target.name = "AArch64 QEMU diagnostic payload";
++        ctx->diagnostic_target.attempt = try_payload;
++        ctx->diagnostic_target.context = ctx->diagnostic;
++        ctx->diagnostic_target.firmware_path = NULL;
++        arm64_boot_register(&ctx->diagnostic_target);
++        return 0;
++    case POSTFLOW_PREPARE:
++        /* Memory reservations checked by ARM64 loaders before handoff. */
++        return 0;
++    case POSTFLOW_PROTECT:
++        /* No flash protection, MMU or memory permissions provided yet. */
++        return 0;
++    case POSTFLOW_BOOT:
++        uart_puts("[post] shared SeaBIOS POST flow ready\n");
++        arm64_boot_execute();
++        return 0;
++    default:
++        return -1;
++    }
++}
++
+ void boot_main(void *dtb)
+ {
+     /* Initial console base is a QEMU virt development default only. */
+@@ -100,49 +184,23 @@ void boot_main(void *dtb)
+         uart_puts("[arm64] no RAM node found\n");
+     }
+ 
+-    /* Real shared SeaBIOS memory-map and ROM-file registries. */
+-    if (arm64_post_memory(&info, dtb) != 0) {
+-        uart_puts("[arm64] invalid memory layout; refusing handoff\n");
+-        goto idle;
+-    }
+-    if (info.has_fwcfg) {
+-        uart_puts("[arm64] QEMU fw_cfg MMIO: ");
+-        uart_hex(info.fwcfg_base);
+-        uart_newline();
+-        int found = arm64_fwcfg_init(info.fwcfg_base);
+-        if (found >= 0)
+-            arm64_fwcfg_report();
+-        else {
+-            uart_puts("[arm64] fw_cfg initialization rejected: ");
+-            uart_dec((uint32_t)(-found));
+-            uart_newline();
+-        }
+-    } else {
+-        uart_puts("[arm64] no fw_cfg node in Device Tree\n");
+-    }
+-    arm64_virtio_discover(&info);
+-    /* SeaBIOS fw_cfg bootorder uses this exact legacy MMIO path format.
+-     * Only the device-priority matcher is shared; no x86 BIOS ABI is used. */
+-    static char BootMMIOPath[] = "/virtio-mmio@0000000000000000/*";
+-    uintptr_t disk_mmio = arm64_virtio_blk_mmio();
+-    if (disk_mmio) {
+-        static const char hex[] = "0123456789abcdef";
+-        for (int i = 0; i < 16; ++i)
+-            BootMMIOPath[13 + i] = hex[(disk_mmio >> ((15-i)*4)) & 15u];
+-        arm64_boot_set_disk_path(BootMMIOPath);
+-    }
+-    arm64_disk_probe();
+-    arm64_legacy_discover(dtb);
+-    arm64_linux_discover(dtb);
++    /* The shared postflow_run() sequence is also used by src/post.c on x86.
++     * The ARM64 callbacks deliberately skip x86-only stages. */
+     struct diagnostic_context context = { .info = &info, .dtb = dtb };
+-    struct arm64_boot_target diagnostic = {
+-        .priority = 10,
+-        .name = "AArch64 QEMU diagnostic payload",
+-        .attempt = try_payload,
+-        .context = &context,
++    struct arm64_post_context post_ctx = {
++        .info = &info, .dtb = dtb, .diagnostic = &context,
+     };
+-    arm64_boot_register(&diagnostic);
+-    arm64_boot_execute();
++    const struct postflow_ops post_ops = { .step = arm64_post_step };
++    enum postflow_stage failed_stage;
++    status = postflow_run(&post_ops, &post_ctx, &failed_stage);
++    if (status) {
++        uart_puts("[post] shared POST stage failed: ");
++        uart_dec((uint32_t)failed_stage);
++        uart_puts(" status ");
++        uart_dec((uint32_t)(-status));
++        uart_newline();
++    }
++
+ idle:
+     uart_puts("[arm64] halt (WFE). Windows ARM64 legacy boot not implemented.\n");
+     for (;;)
+diff --git a/arm64/tests/test_postflow.py b/arm64/tests/test_postflow.py
+new file mode 100644
+index 0000000..0132d17
+--- /dev/null
++++ b/arm64/tests/test_postflow.py
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++"""Exercise the architecture-neutral POST sequence with a native C harness.
++
++Only ordering/error policy is tested here; device drivers need QEMU coverage.
++"""
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++HARNESS = r'''
++#include "postflow.h"
++#include <stdio.h>
++
++static enum postflow_stage reached[POSTFLOW_STAGE_COUNT];
++static unsigned calls;
++static int failure;
++
++static int step(void *context, enum postflow_stage stage) {
++    if (context != &failure || stage >= POSTFLOW_STAGE_COUNT)
++        return -99;
++    reached[calls++] = stage;
++    if ((int)stage == failure)
++        return -17;
++    return 0;
++}
++
++int main(void) {
++    struct postflow_ops ops = { .step = step };
++    enum postflow_stage stopped = POSTFLOW_STAGE_COUNT;
++    if (postflow_run(0, 0, &stopped) != -1 ||
++        stopped != POSTFLOW_STAGE_COUNT)
++        return 1;
++    failure = -1;
++    calls = 0;
++    if (postflow_run(&ops, &failure, &stopped) != 0 ||
++        stopped != POSTFLOW_STAGE_COUNT || calls != POSTFLOW_STAGE_COUNT)
++        return 2;
++    for (int i = 0; i < POSTFLOW_STAGE_COUNT; i++)
++        if ((int)reached[i] != i)
++            return 3;
++    for (int abort_stage = 0; abort_stage < POSTFLOW_STAGE_COUNT;
++         abort_stage++) {
++        failure = abort_stage;
++        calls = 0;
++        stopped = POSTFLOW_STAGE_COUNT;
++        if (postflow_run(&ops, &failure, &stopped) != -17 ||
++            (int)stopped != abort_stage || calls != (unsigned)abort_stage + 1)
++            return 4;
++    }
++    puts("POSTFLOW: ordered stages, all abort points, invalid ops OK");
++    return 0;
++}
++'''
++
++class PostflowTests(unittest.TestCase):
++    def test_x86_and_arm_shared_sequencer_contract(self):
++        with tempfile.TemporaryDirectory() as directory:
++            source = Path(directory) / 'harness.c'
++            binary = Path(directory) / 'harness'
++            source.write_text(HARNESS)
++            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
++                            '-I', str(ROOT / 'src'), str(source),
++                            str(ROOT / 'src/postflow.c'), '-o', str(binary)],
++                           check=True)
++            result = subprocess.run([str(binary)], check=True, text=True,
++                                    capture_output=True)
++            self.assertIn('ordered stages', result.stdout)
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/src/post.c b/src/post.c
+index f93106a..20cfd37 100644
+--- a/src/post.c
++++ b/src/post.c
+@@ -20,6 +20,7 @@
+ #include "malloc.h" // malloc_init
+ #include "memmap.h" // SYMBOL
+ #include "output.h" // dprintf
++#include "postflow.h" // shared POST ordering
+ #include "string.h" // memset
+ #include "util.h" // kbd_init
+ #include "tcgbios.h" // tpm_*
+@@ -192,46 +193,63 @@ startBoot(void)
+     call16_int(0x19, &br);
+ }
+ 
+-// Main setup code.
+-static void
+-maininit(void)
++// SeaBIOS x86 operations for the shared architecture-neutral POST sequence.
++// The ordering lives in src/postflow.c, but the PC BIOS mechanisms remain
++// here: IVT/BDA, PCI/PIC, VGA option ROM, and 16-bit INT19 never run on ARM64.
++static int
++x86_post_step(void *unused, enum postflow_stage stage)
+ {
+-    // Initialize internal interfaces.
+-    interface_init();
+-
+-    // Setup platform devices.
+-    platform_hardware_setup();
+-
+-    // Start hardware initialization (if threads allowed during optionroms)
+-    if (threads_during_optionroms())
+-        device_hardware_setup();
+-
+-    // Run vga option rom
+-    vgarom_setup();
+-    sercon_setup();
+-    enable_vga_console();
+-
+-    // Do hardware initialization (if running synchronously)
+-    if (!threads_during_optionroms()) {
+-        device_hardware_setup();
++    switch (stage) {
++    case POSTFLOW_INTERFACE:
++        interface_init();
++        break;
++    case POSTFLOW_PLATFORM:
++        platform_hardware_setup();
++        break;
++    case POSTFLOW_ASYNC_DEVICES:
++        if (threads_during_optionroms())
++            device_hardware_setup();
++        break;
++    case POSTFLOW_VIDEO:
++        vgarom_setup();
++        sercon_setup();
++        enable_vga_console();
++        break;
++    case POSTFLOW_SYNC_DEVICES:
++        if (!threads_during_optionroms()) {
++            device_hardware_setup();
++            wait_threads();
++        }
++        break;
++    case POSTFLOW_OPTIONROMS:
++        optionrom_setup();
++        break;
++    case POSTFLOW_BOOTMENU:
++        interactive_bootmenu();
+         wait_threads();
++        break;
++    case POSTFLOW_PREPARE:
++        prepareboot();
++        break;
++    case POSTFLOW_PROTECT:
++        make_bios_readonly();
++        break;
++    case POSTFLOW_BOOT:
++        startBoot();
++        break;
++    default:
++        return -1;
+     }
++    return 0;
++}
+ 
+-    // Run option roms
+-    optionrom_setup();
+-
+-    // Allow user to modify overall boot order.
+-    interactive_bootmenu();
+-    wait_threads();
+-
+-    // Prepare for boot.
+-    prepareboot();
+-
+-    // Write protect bios memory.
+-    make_bios_readonly();
+-
+-    // Invoke int 19 to start boot process.
+-    startBoot();
++// Main setup code. POST flow is now shared with the AArch64 build.
++static void
++maininit(void)
++{
++    const struct postflow_ops ops = { .step = x86_post_step };
++    if (postflow_run(&ops, NULL, NULL))
++        panic("Invalid SeaBIOS POST sequence\n");
+ }
+ 
+ 
+diff --git a/src/postflow.c b/src/postflow.c
+new file mode 100644
+index 0000000..1fc77e0
+--- /dev/null
++++ b/src/postflow.c
+@@ -0,0 +1,23 @@
++// Shared SeaBIOS POST sequencing, factored from the original src/post.c.
++// Copyright (C) SeaBIOS contributors. Distributed under the GNU LGPLv3.
++#include "postflow.h"
++
++int
++postflow_run(const struct postflow_ops *ops, void *opaque,
++             enum postflow_stage *failed_stage)
++{
++    if (failed_stage)
++        *failed_stage = POSTFLOW_STAGE_COUNT;
++    if (!ops || !ops->step)
++        return -1;
++    for (enum postflow_stage stage = POSTFLOW_INTERFACE;
++         stage < POSTFLOW_STAGE_COUNT; stage++) {
++        int status = ops->step(opaque, stage);
++        if (status) {
++            if (failed_stage)
++                *failed_stage = stage;
++            return status;
++        }
++    }
++    return 0;
++}
+diff --git a/src/postflow.h b/src/postflow.h
+new file mode 100644
+index 0000000..6eda90f
+--- /dev/null
++++ b/src/postflow.h
+@@ -0,0 +1,32 @@
++// Architecture-neutral POST stage order shared by x86 SeaBIOS and AArch64.
++// Copyright (C) SeaBIOS contributors. Distributed under the GNU LGPLv3.
++#ifndef __POSTFLOW_H
++#define __POSTFLOW_H
++
++/* Stages preserve upstream src/post.c maininit() ordering. An architecture
++ * may omit phases that have no equivalent (e.g. x86 option ROMs on ARM64),
++ * but must never silently pretend to have implemented a PC BIOS service. */
++enum postflow_stage {
++    POSTFLOW_INTERFACE = 0,
++    POSTFLOW_PLATFORM,
++    POSTFLOW_ASYNC_DEVICES,
++    POSTFLOW_VIDEO,
++    POSTFLOW_SYNC_DEVICES,
++    POSTFLOW_OPTIONROMS,
++    POSTFLOW_BOOTMENU,
++    POSTFLOW_PREPARE,
++    POSTFLOW_PROTECT,
++    POSTFLOW_BOOT,
++    POSTFLOW_STAGE_COUNT
++};
++
++/* Callback returns 0 for success; any nonzero value aborts the pipeline.
++ * POSTFLOW_BOOT normally never returns after a successful handoff. */
++struct postflow_ops {
++    int (*step)(void *opaque, enum postflow_stage stage);
++};
++
++int postflow_run(const struct postflow_ops *ops, void *opaque,
++                 enum postflow_stage *failed_stage);
++
++#endif
