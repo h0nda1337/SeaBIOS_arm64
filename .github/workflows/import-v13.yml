@@ -23,9 +23,9 @@ jobs:
           base64 --decode bootstrap/v13.patch.xz.b64 > /tmp/v13.patch.xz
           echo "e7a39f60a88d599b694e66538ac2716668daaf046bbb9e7960568ec1a78c8c72  /tmp/v13.patch.xz" | sha256sum -c -
           xz -dc /tmp/v13.patch.xz > /tmp/v13.patch
-          git apply --check /tmp/v13.patch
-          git apply /tmp/v13.patch
-          rm bootstrap/v13.patch.xz.b64 .github/workflows/import-v13.yml
+          git apply --check --exclude=.github/workflows/arm64-v13-verify.yml /tmp/v13.patch
+          git apply --exclude=.github/workflows/arm64-v13-verify.yml /tmp/v13.patch
+          rm bootstrap/v13.patch.xz.b64
           rmdir bootstrap || true
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
