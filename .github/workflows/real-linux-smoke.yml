@@ -71,34 +71,53 @@ jobs:
               f.seek(init_lba*512);f.write(initrd)
           print(f'MBR disk: {disk.stat().st_size} bytes, /init ELF={len(elf)} bytes')
           PY
-      - name: Boot real kernel through SeaBIOS and look for Linux userspace
+      - name: Boot real kernel with BOTH VirtIO-MMIO transports
         run: |
           python3 - <<'PY'
-          import signal,subprocess
+          import os,selectors,signal,subprocess,time
           from pathlib import Path
-          args=['qemu-system-aarch64','-machine','virt','-cpu','cortex-a72','-m','512M',
-                '-smp','1','-display','none','-monitor','none','-serial','stdio',
-                '-bios','arm64/out/seabios-arm64.bin','-drive',
-                'if=none,format=raw,readonly=on,file=/tmp/real-linux-mbr.img,id=d0',
-                '-device','virtio-blk-device,drive=d0']
-          p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
-          try:
-              out,_=p.communicate(timeout=100)
-          except subprocess.TimeoutExpired:
-              import os
-              os.killpg(p.pid,signal.SIGKILL)
-              out,_=p.communicate(timeout=5)
-          log=out.decode(errors='replace')
-          Path('/tmp/seabios-real-linux.log').write_text(log)
-          print(log[-24000:])
-          assert 'Linux version' in log, 'No real kernel Linux version banner'
-          assert 'SEABIOS_REAL_LINUX_USERSPACE_REACHED' in log, 'Linux did not execute initramfs /init'
-          print('PASS: real Linux ARM64 userspace reached via SeaBIOS MBR (no UEFI)')
+          for modern in (False,True):
+              mode='modern' if modern else 'legacy'
+              args=['qemu-system-aarch64','-machine','virt','-cpu','cortex-a72',
+                    '-m','512M','-smp','1','-display','none',
+                    '-monitor','none','-serial','stdio',
+                    '-bios','arm64/out/seabios-arm64.bin',
+                    '-drive','if=none,format=raw,readonly=on,file=/tmp/real-linux-mbr.img,id=d0',
+                    '-device','virtio-blk-device,drive=d0']
+              if modern: args+=['-global','virtio-mmio.force-legacy=false']
+              p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
+              chunks=bytearray()
+              selector=selectors.DefaultSelector()
+              selector.register(p.stdout,selectors.EVENT_READ)
+              deadline=time.monotonic()+100
+              marker=b'SEABIOS_REAL_LINUX_USERSPACE_REACHED'
+              try:
+                  while time.monotonic()<deadline:
+                      ready=selector.select(timeout=1)
+                      if not ready:
+                          if p.poll() is not None: break
+                          continue
+                      chunk=os.read(p.stdout.fileno(),65536)
+                      if not chunk: break
+                      chunks.extend(chunk)
+                      if marker in chunks: break
+              finally:
+                  selector.close()
+                  if p.poll() is None:
+                      os.killpg(p.pid,signal.SIGKILL)
+                  p.wait(timeout=5)
+              log=chunks.decode(errors='replace')
+              Path('/tmp/seabios-real-linux-'+mode+'.log').write_text(log)
+              print(f'----- {mode} VirtIO-MMIO -----')
+              print(log[-7000:])
+              assert 'Linux version' in log, mode+': Linux kernel did not initialize'
+              assert marker.decode() in log, mode+': Linux did not execute /init'
+              print('PASS: native ARM64 Linux /init reached through MBR, '+mode+' VirtIO-MMIO; NO UEFI')
           PY
       - name: Save evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: seabios-arm64-real-linux-boot
-          path: /tmp/seabios-real-linux.log
+          path: /tmp/seabios-real-linux-*.log
           if-no-files-found: ignore
