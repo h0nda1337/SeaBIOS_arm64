@@ -1,4 +1,16 @@
-# SeaBIOS-ARM64 — estado experimental de v0.8
+# SeaBIOS-ARM64 — estado experimental de v1.5
+
+La v1.5 ejecuta `src/block.c` original en AArch64 y comparte el registro IPL
+extraído de `src/boot.c`. Arranca Debian ARM64 con systemd PID 1 y raíz ext4
+en escritura, con VirtIO v1/v2, dos posiciones de disco y 128 MiB de RAM.
+La compilación x86 se conserva. Estimación de ingeniería: alrededor de 44%,
+sin equivalencia con cobertura medida o un port completo.
+
+Estado y pruebas: [PHASE13_CORE_V15.md](PHASE13_CORE_V15.md).
+Reproducción Linux: [DEBIAN_EXT4_ROOT.md](DEBIAN_EXT4_ROOT.md).
+Límites de Windows: [WINDOWS_ARM64_CONSTRAINTS.md](WINDOWS_ARM64_CONSTRAINTS.md).
+
+Los apartados siguientes describen el estado histórico de v0.8.
 
 **Ruta MBR FAT32 AArch64 funcional en QEMU, sin UEFI. Windows ARM64 no arranca.**
 

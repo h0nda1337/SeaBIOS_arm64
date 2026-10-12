@@ -63,6 +63,10 @@ _start:
 .type arm64_handoff, %function
 arm64_handoff:
     /* x0=entry, x1=DTB. No UEFI/SMCCC protocol is implied by this jump. */
+    stp     x0, x1, [sp, #-16]!
+    bl      arm64_virtio_quiesce
+    cbnz    x0, .Lhandoff_park
+    ldp     x0, x1, [sp], #16
     mov     x4, x0
     mov     x0, x1
     mov     x1, xzr
@@ -74,6 +78,9 @@ arm64_handoff:
     dsb     sy
     isb
     br      x4
+.Lhandoff_park:
+    wfe
+    b       .Lhandoff_park
 .size arm64_handoff, . - arm64_handoff
 
 /* Clean a freshly loaded executable region to the Point of Coherency before

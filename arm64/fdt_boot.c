@@ -14,15 +14,19 @@
 #define FDT_NOP 4u
 #define FDT_END 9u
 #define FDT_LIMIT (2u * 1024u * 1024u)
-#define FDT_HEADROOM 4096u
-#define BOOTARG_MAX 255u
-#define FDT_OUTPUT_SIZE (FDT_LIMIT + FDT_HEADROOM)
+/* Linux's AArch64 boot protocol caps the entire DTB at 2 MiB, including
+ * bootloader-added properties. Do not allow headroom beyond that limit. */
+#define FDT_OUTPUT_SIZE FDT_LIMIT
 static uint8_t BootTree[FDT_OUTPUT_SIZE] __attribute__((aligned(4096)));
 
 static uint32_t be32(const uint8_t *p)
 {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
            (uint32_t)p[2] << 8 | p[3];
+}
+static uint64_t be64(const uint8_t *p)
+{
+    return (uint64_t)be32(p) << 32 | be32(p + 4);
 }
 static void put32(uint8_t *p, uint32_t n)
 {
@@ -97,6 +101,8 @@ int arm64_fdt_prepare(const void *source, const char *bootargs,
     if (!source || !bootargs || !prepared || !length ||
         initrd_start > initrd_end || (initrd_start == 0 && initrd_end))
         return -1;
+    *prepared = NULL;
+    *length = 0;
     const uint8_t *in = source;
     if (be32(in) != FDT_MAGIC) return -2;
     uint32_t total = be32(in + 4), struct_off = be32(in + 8);
@@ -110,9 +116,24 @@ int arm64_fdt_prepare(const void *source, const char *bootargs,
         !valid(strings_off, strings_size, total) ||
         strings_off < struct_off + struct_size || !strings_size)
         return -3;
+    /* The map ends at its zero address/size entry, before structure tokens.
+     * Validate every preserved reservation so Linux never receives a corrupt
+     * map after an otherwise successful /chosen rewrite. */
+    uint32_t reserve = reserve_off;
+    for (;;) {
+        if (!valid(reserve, 16u, struct_off))
+            return -22;
+        uint64_t start = be64(in + reserve);
+        uint64_t size = be64(in + reserve + 8u);
+        if (!start && !size)
+            break;
+        if (!size || start > UINT64_MAX - size)
+            return -22;
+        reserve += 16u;
+    }
     uint32_t argslen = 0;
-    while (argslen <= BOOTARG_MAX && bootargs[argslen]) ++argslen;
-    if (argslen > BOOTARG_MAX) return -4;
+    while (argslen <= ARM64_FDT_BOOTARG_MAX && bootargs[argslen]) ++argslen;
+    if (argslen > ARM64_FDT_BOOTARG_MAX) return -4;
     uint32_t argsize = argslen + 1;
     /* Appending names, even if the original strings table already contains
      * them, is permitted by the FDT format and avoids mutating old offsets. */

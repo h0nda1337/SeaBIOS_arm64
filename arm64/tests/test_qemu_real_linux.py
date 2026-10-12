@@ -30,6 +30,8 @@ def build():
     p.add_argument('--secondary-disk', action='store_true',
                    help='boot Linux from disk1 while disk0 is unbootable')
     p.add_argument('--log', type=Path)
+    p.add_argument('--bios', type=Path, default=ROOT/'out/seabios-arm64.bin',
+                   help='firmware binary, including a saved baseline for comparison')
     a=p.parse_args()
     if not a.image.is_file():
         p.error('real ARM64 kernel Image missing (set ARM64_REAL_LINUX_IMAGE)')
@@ -55,7 +57,7 @@ def build():
             cmd+=['-L',os.environ['QEMU_ROM_DIR']]
         cmd+=['-machine','virt','-cpu','cortex-a72','-m','512M','-smp','1',
               '-display','none','-monitor','none','-serial','stdio',
-              '-bios',str(ROOT/'out/seabios-arm64.bin'),
+              '-bios',str(a.bios),
               '-drive',f'if=none,format=raw,readonly=on,file={disk},id=vd0',
               '-device','virtio-blk-device,drive=vd0']
         if a.secondary_disk:

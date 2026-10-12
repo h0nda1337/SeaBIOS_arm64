@@ -84,7 +84,8 @@ ROOT = 2
 BOOT = 3
 # The on-disk FAT chain is intentionally fragmented. Allow PE with a
 # .reloc section to exceed the historical three-cluster fixture size.
-FILE_CHAIN = [4, 6, 9] + list(range(10, 10 + max(0, (len(filedata) + 511)//512 - 3)))
+needed_clusters = (len(filedata) + 511) // 512
+FILE_CHAIN = ([4, 6, 9] + list(range(10, 10 + max(0, needed_clusters - 3))))[:needed_clusters]
 
 
 def wr(f, lba, data):

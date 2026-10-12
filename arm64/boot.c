@@ -3,6 +3,7 @@
 #include "include/bootorder.h"
 #include "include/fwcfg.h"
 #include "../src/postflow.h"
+#include "../src/block.h"
 
 /* ARM64 staging firmware - not yet a UEFI or legacy BIOS implementation. */
 #define PAYLOAD_MAGIC "SBARMP01"
@@ -107,6 +108,7 @@ static int arm64_post_step(void *opaque, enum postflow_stage stage)
         return 0;
     case POSTFLOW_SYNC_DEVICES: {
         arm64_virtio_discover(info);
+        block_setup();
         /* Each VirtIO disk receives its own stable QEMU firmware pathname.
          * The SeaBIOS bootorder parser can now rank disks independently. */
         for (uint32_t disk = 0; disk < arm64_virtio_blk_count(); ++disk) {
@@ -155,7 +157,7 @@ void boot_main(void *dtb)
 {
     /* Initial console base is a QEMU virt development default only. */
     uart_init(VIRT_PL011_FALLBACK);
-    uart_puts("\nSeaBIOS-ARM64 legacy MBR v1.4-dev (AArch64/QEMU virt)\n");
+    uart_puts("\nSeaBIOS-ARM64 legacy MBR v1.5-dev (AArch64/QEMU virt)\n");
     arm64_report_cpu();
     arm64_timer_init();
     struct fdt_info info;

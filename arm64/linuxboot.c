@@ -5,16 +5,19 @@
 #include "include/gpt.h"
 #include "include/fdt_boot.h"
 #include "include/fat32.h"
+#include "../src/romfile.h"
+#include "../src/e820map.h"
 
-/* A minimal direct Linux Image handoff from a raw MBR/GPT Linux partition.
- * This deliberately omits filesystems, EFI, initrd, DTB relocation and
- * cryptographic signature checks. Only QEMU virt has been tested. */
+/* Direct Linux Image handoff from raw MBR/GPT or MBR/FAT32. Firmware loads
+ * the Image and optional initrd; Linux owns the root filesystem. Only QEMU
+ * virt has been tested. This native path has no EFI services. */
 #define LINUX_BASE UINT64_C(0x48000000) /* 2 MiB aligned inside QEMU RAM */
 #define LINUX_MBR_PARTITION_TYPE 0x83u
 #define SECTOR_BYTES 512u
 #define INITRD_MBR_PARTITION_TYPE 0xdau /* experimental raw data */
 #define MAX_INITRD_BYTES (16u * 1024u * 1024u)
 #define LINUX_CMDLINE "console=ttyAMA0,115200 earlycon=pl011,mmio32,0x09000000 rdinit=/init"
+static char LinuxCmdline[ARM64_FDT_BOOTARG_MAX + 1u];
 static uint8_t Sector[SECTOR_BYTES];
 static uint8_t ReadBatch[SECTOR_BYTES * 16u];
 static uint8_t DiskMBR[SECTOR_BYTES];
@@ -44,19 +47,110 @@ static uint32_t u32le(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/* Reuse the SeaBIOS romfile registry for board/operator configuration.
+ * A configured but malformed command line must not silently boot with the
+ * diagnostic rdinit default. Read directly into bounded firmware storage. */
+static const char *linux_cmdline(void)
+{
+    struct romfile_s *file = romfile_find("etc/linux-cmdline");
+    if (!file)
+        return LINUX_CMDLINE;
+    if (!file->size || file->size > ARM64_FDT_BOOTARG_MAX ||
+        file->copy(file, LinuxCmdline, ARM64_FDT_BOOTARG_MAX) !=
+        (int)file->size)
+        return NULL;
+    uint32_t size = file->size;
+    /* Permit a text-file newline or one trailing NUL from a fw_cfg string. */
+    while (size && (LinuxCmdline[size - 1u] == '\n' ||
+                   LinuxCmdline[size - 1u] == '\r' ||
+                   LinuxCmdline[size - 1u] == '\0'))
+        --size;
+    if (!size)
+        return NULL;
+    for (uint32_t i = 0; i < size; ++i)
+        if ((unsigned char)LinuxCmdline[i] < 0x20u ||
+            (unsigned char)LinuxCmdline[i] > 0x7eu)
+            return NULL;
+    LinuxCmdline[size] = 0;
+    uart_puts("[linux] command line from etc/linux-cmdline: ");
+    uart_puts(LinuxCmdline);
+    uart_newline();
+    return LinuxCmdline;
+}
+
+static uint64_t candidate_initrd_bytes(const struct linux_candidate *candidate)
+{
+    return candidate->from_fat32 ? candidate->initrd_file_bytes :
+           candidate->initrd_sector_count * SECTOR_BYTES;
+}
+
+/* Retain the established load address when it fits. On smaller RAM machines,
+ * use the original SeaBIOS E820 map to select another 2 MiB aligned base.
+ * Check both payloads before writing either; never allocate through firmware
+ * state, the source DTB, or a device-tree reservation. */
+static uint64_t linux_region(const struct linux_candidate *candidate,
+                             uint64_t base)
+{
+    uint64_t offset = candidate->header.text_offset;
+    uint64_t size = candidate->header.image_size;
+    if (base > UINT64_MAX - offset)
+        return 0;
+    uint64_t dest = base + offset;
+    if (!arm64_post_can_load(dest, size))
+        return 0;
+    uint64_t initbytes = candidate_initrd_bytes(candidate);
+    if (initbytes) {
+        if (dest + size > UINT64_MAX - UINT64_C(0x1fffff))
+            return 0;
+        uint64_t initbase = (dest + size + UINT64_C(0x1fffff)) &
+                            ~UINT64_C(0x1fffff);
+        if (!arm64_post_can_load(initbase, initbytes))
+            return 0;
+    }
+    return dest;
+}
+
+static uint64_t linux_load_address(const struct linux_candidate *candidate)
+{
+    uint64_t dest = linux_region(candidate, LINUX_BASE);
+    if (dest)
+        return dest;
+    for (int i = 0; i < e820_count; ++i) {
+        const struct e820entry *region = &e820_list[i];
+        if (region->type != E820_RAM ||
+            region->start > UINT64_MAX - UINT64_C(0x1fffff))
+            continue;
+        uint64_t base = (region->start + UINT64_C(0x1fffff)) &
+                        ~UINT64_C(0x1fffff);
+        dest = linux_region(candidate, base);
+        if (dest) {
+            uart_puts("[linux] selected safe RAM base from SeaBIOS E820: ");
+            uart_hex(base);
+            uart_newline();
+            return dest;
+        }
+    }
+    return 0;
+}
+
 static int boot_linux_image(void *context)
 {
     const struct linux_candidate *candidate = context;
     if (!candidate)
         return -1;
-    const uint64_t dest = LINUX_BASE + candidate->header.text_offset;
+    const char *cmdline = linux_cmdline();
+    if (!cmdline) {
+        uart_puts("[linux] invalid etc/linux-cmdline; refusing boot\n");
+        return -8;
+    }
+    const uint64_t dest = linux_load_address(candidate);
     const uint64_t size = candidate->header.image_size;
     uart_puts("[boot] Linux drive index ");
     uart_dec(candidate->drive_index); uart_newline();
     /* These regions are checked against actual RAM and firmware reservations,
      * including the boot-time stack, DTB and QEMU flash mappings. */
-    if (dest < LINUX_BASE || !arm64_post_can_load(dest, size)) {
-        uart_puts("[linux] destination overlaps reserved memory\n");
+    if (!dest) {
+        uart_puts("[linux] no safe RAM region for kernel and initrd\n");
         return -1;
     }
     const uint64_t blocks = (size + SECTOR_BYTES - 1u) / SECTOR_BYTES;
@@ -105,9 +199,7 @@ static int boot_linux_image(void *context)
 
     uint64_t initrd_base = 0, initrd_end = 0;
     if (candidate->initrd_sector_count || candidate->initrd_file_bytes) {
-        uint64_t nbytes = candidate->from_fat32
-            ? candidate->initrd_file_bytes
-            : candidate->initrd_sector_count * SECTOR_BYTES;
+        uint64_t nbytes = candidate_initrd_bytes(candidate);
         if (dest + size > UINT64_MAX - UINT64_C(0x1fffff))
             return -4;
         initrd_base = (dest + size + UINT64_C(0x1fffff)) &
@@ -141,7 +233,8 @@ static int boot_linux_image(void *context)
         }
         arm64_cache_clean_range(initrd, nbytes);
         initrd_end = initrd_base + nbytes;
-        uart_puts("[initrd] loaded at ");
+        uart_puts(candidate->from_fat32 ? "[initrd] loaded at " :
+                  "[initrd] raw partition loaded at ");
         uart_hex(initrd_base);
         uart_puts(" / bytes ");
         uart_hex(nbytes);
@@ -149,7 +242,7 @@ static int boot_linux_image(void *context)
     }
     const void *new_dtb = NULL;
     uint32_t dtb_size = 0;
-    int status = arm64_fdt_prepare(candidate->dtb, LINUX_CMDLINE,
+    int status = arm64_fdt_prepare(candidate->dtb, cmdline,
                                    initrd_base, initrd_end,
                                    &new_dtb, &dtb_size);
     if (status || !new_dtb) {
@@ -191,15 +284,20 @@ static void arm64_linux_fat_discover(void *dtb, uint32_t disk)
                                 &header) || header.image_size < file_bytes)
         return;
     uint32_t initrd_cluster = 0, initrd_bytes = 0;
-    if (!arm64_fat32_find(&LinuxFat, boot, LINUX_FAT_INITRD_NAME, 0,
-                          &initrd_cluster, &initrd_bytes)) {
+    int initrd_status = arm64_fat32_find(&LinuxFat, boot,
+                                        LINUX_FAT_INITRD_NAME, 0,
+                                        &initrd_cluster, &initrd_bytes);
+    if (!initrd_status) {
         if (!initrd_bytes || initrd_bytes > MAX_INITRD_BYTES) {
             uart_puts("[linux] FAT32 initrd size rejected\n");
             return;
         }
-    } else {
+    } else if (initrd_status == -2) {
         initrd_cluster = 0;
         initrd_bytes = 0;
+    } else {
+        uart_puts("[linux] FAT32 initrd lookup failed; refusing candidate\n");
+        return;
     }
     struct linux_candidate *candidate = &FatCandidates[disk];
     candidate->drive_index = disk;

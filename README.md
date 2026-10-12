@@ -1,6 +1,22 @@
-# Coming soon... / Próximamente...
+# SeaBIOS-ARM64
 
 ## SeaBIOS-ARM64
+
+### v1.5-dev — original block/boot core and Debian ext4 (No UEFI)
+
+AArch64 now executes the original `src/block.c` drive registry and
+`process_op`, plus shared IPL registration extracted from `src/boot.c`.
+FAT32 corruption handling, controller failure isolation, strict bootorder
+and native handoff are covered by QEMU regressions. Genuine Debian ARM64
+reaches systemd as PID 1 on a writable ext4 disk root, with VirtIO-MMIO v1/v2,
+disk0/disk1 and 128 MiB RAM. The original x86 BIOS still builds.
+
+[v1.5 implementation and validation](arm64/PHASE13_CORE_V15.md) ·
+[Debian ext4 reproduction](arm64/DEBIAN_EXT4_ROOT.md).
+
+Engineering progress is estimated at roughly 44%, not measured coverage.
+The firmware remains experimental and QEMU virt specific. No UEFI services
+or Windows ARM64 boot support are implemented.
 
 ### v1.3-dev — independent native ARM64 boot devices (No UEFI)
 
@@ -165,4 +181,3 @@ Consulta [PHASE7_BLOCK_CORE.md](arm64/PHASE7_BLOCK_CORE.md).
 
 Upstream SeaBIOS snapshot: `81ec9ec0bcf45df11fb7f98339ec9036b546fca0`.
 Original licenses and third-party notices are retained in the repository.
-

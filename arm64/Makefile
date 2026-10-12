@@ -12,16 +12,16 @@ CFLAGS := --target=aarch64-none-elf -march=armv8-a -ffreestanding -mgeneral-regs
           -Wall -Wextra -Werror -Wno-unused-parameter -I$(ARM)
 # Building original SeaBIOS src/e820map.c and using its src/list.h is an
 # incremental step toward shared subsystems; this is not the full POST port.
-CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src
+CFLAGS += -DCONFIG_AARCH64=1 -I$(ROOT)/arm64/include -I$(ROOT)/src -MMD -MP
 OBJS := $(OUT)/start.o $(OUT)/boot.o $(OUT)/uart.o $(OUT)/fdt.o \
         $(OUT)/post.o $(OUT)/postflow.o $(OUT)/bootorder.o $(OUT)/string.o \
         $(OUT)/compat.o $(OUT)/e820map.o $(OUT)/romfile.o \
-        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
-        $(OUT)/block.o $(OUT)/blockpolicy.o $(OUT)/blockgeom.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
+        $(OUT)/heap.o $(OUT)/fwcfg.o $(OUT)/bootprio.o $(OUT)/bootlist.o $(OUT)/sha256.o $(OUT)/exception.o $(OUT)/virtio-mmio.o \
+        $(OUT)/block.o $(OUT)/block-core.o $(OUT)/blockpolicy.o $(OUT)/blockgeom.o $(OUT)/diskprobe.o $(OUT)/linuxboot.o $(OUT)/linuximage.o \
         $(OUT)/virtio-ring.o $(OUT)/gpt.o $(OUT)/gptcrc.o $(OUT)/timer.o \
         $(OUT)/fdt_boot.o $(OUT)/fat32.o $(OUT)/legacyboot.o $(OUT)/pe_legacy.o
 
-.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-multiboot-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test qemu-fat-linux-test
+.PHONY: all clean run test qemu-test qemu-multidrive-test qemu-multiboot-test qemu-disk-test qemu-legacy-test qemu-bootorder-test qemu-reloc-test qemu-real-linux-test qemu-fat-linux-test qemu-bootlist-test qemu-fat-corrupt-test qemu-root-linux-test qemu-block-failure-test
 all: $(OUT)/seabios-arm64.bin $(OUT)/diagnostic-payload.bin
 
 $(OUT):
@@ -52,10 +52,18 @@ $(OUT)/blockgeom.o: $(ROOT)/src/blockgeom.c $(ROOT)/src/blockgeom.h $(ROOT)/src/
 $(OUT)/blockpolicy.o: $(ROOT)/src/blockpolicy.c $(ROOT)/src/blockpolicy.h $(ROOT)/src/block.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
+$(OUT)/block-core.o: $(ROOT)/src/block.c $(ROOT)/src/block.h \
+                      $(ARM)/include/arm64.h $(ARM)/include/seabios_compat.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
 $(OUT)/sha256.o: $(ROOT)/src/sha256.c $(ROOT)/src/sha.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/bootprio.o: $(ROOT)/src/bootprio.c $(ROOT)/src/bootprio.h | $(OUT)
+	$(CLANG) $(CFLAGS) -c $< -o $@
+
+$(OUT)/bootlist.o: $(ROOT)/src/bootlist.c $(ROOT)/src/bootlist.h \
+                     $(ROOT)/src/bootprio.h $(ROOT)/src/block.h $(ROOT)/src/list.h | $(OUT)
 	$(CLANG) $(CFLAGS) -c $< -o $@
 
 $(OUT)/romfile.o: $(ROOT)/src/romfile.c $(ROOT)/src/romfile.h \
@@ -136,6 +144,11 @@ run: all
 	    -device loader,file=$(OUT)/diagnostic-payload.bin,addr=0x48000000
 
 test:
+	python3 $(ARM)/tests/test_block_core.py
+	python3 $(ARM)/tests/test_bootlist.py
+	python3 $(ARM)/tests/test_fat32.py
+	python3 $(ARM)/tests/test_fdt_handoff.py
+	python3 $(ARM)/tests/test_linux_placement.py
 	python3 $(ARM)/tests/test_blockgeom.py
 	python3 $(ARM)/tests/test_postflow.py
 	python3 $(ARM)/tests/test_blockpolicy.py
@@ -172,3 +185,19 @@ qemu-multiboot-test: all $(OUT)/legacy-stage.bin $(OUT)/linux-image-diagnostic.b
 # v1.4: FAT32 file-based Linux Image on active MBR (no UEFI).
 qemu-fat-linux-test: all $(OUT)/linux-image-diagnostic.bin
 	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_fat_linux.py
+
+qemu-bootlist-test: all $(OUT)/legacy-stage.bin
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_bootlist.py
+
+qemu-fat-corrupt-test: all $(OUT)/linux-image-diagnostic.bin
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_fat_corrupt.py
+
+qemu-block-failure-test: all $(OUT)/legacy-stage.bin
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_block_failure.py
+
+# Requires a Debian ARM64 FAT32/ext4 disk prepared by create_debian_root_disk.py.
+qemu-root-linux-test: all
+	QEMU=$(QEMU) python3 $(ARM)/tests/test_qemu_root_linux.py \
+	    --disk "$(ARM64_DEBIAN_ROOT_DISK)" --log $(OUT)/debian-root-linux.log --timeout 120
+
+-include $(OBJS:.o=.d)

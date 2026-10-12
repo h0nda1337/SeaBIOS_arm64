@@ -1,36 +1,42 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
-/* SeaBIOS drive_s/disk_op_s command interface for AArch64 VirtIO-MMIO.
- * x86 continues to dispatch in src/block.c, using shared blockpolicy.c.
- * The physical hardware backend still lives in src/hw/virtio-mmio.c. */
+/* AArch64 storage registration and controller backend. The original
+ * src/block.c owns drive mapping and process_op() on both architectures. */
 #include "include/arm64.h"
 #include "../src/block.h"
-#include "../src/blockpolicy.h"
-#include "../src/blockgeom.h"
 #include "../src/std/disk.h"
 
-/* The transport is private; all existing ARM64 boot consumers call the
- * public wrappers below, enforcing the SeaBIOS disk-operation contract. */
+/* Private, bounded transport requests; clients use disk_op_s exclusively. */
 extern int arm64_virtio_blk_read_many_transport_at(uint32_t index,
                            uint64_t lba, void *buf, uint32_t count);
 
 static struct drive_s VirtioDrives[ARM64_MAX_BLOCK_DRIVES];
 static uint8_t DriveRegistered[ARM64_MAX_BLOCK_DRIVES];
+#define TRANSPORT_SECTORS 16u
 
-static struct drive_s *
+struct drive_s *
 arm64_block_drive_at(uint32_t index)
 {
-    if (index >= ARM64_MAX_BLOCK_DRIVES)
+    if (index >= ARM64_MAX_BLOCK_DRIVES || !DriveRegistered[index] ||
+        !arm64_virtio_blk_capacity_at(index))
         return NULL;
-    uint64_t sectors = arm64_virtio_blk_capacity_at(index);
-    if (!sectors)
-        return NULL;
-    struct drive_s *drive = &VirtioDrives[index];
-    if (!DriveRegistered[index]) {
+    return &VirtioDrives[index];
+}
+
+void
+arm64_block_setup(void)
+{
+    for (uint32_t index = 0; index < arm64_virtio_blk_count(); index++) {
+        uint64_t sectors = arm64_virtio_blk_capacity_at(index);
+        if (index >= ARM64_MAX_BLOCK_DRIVES || !sectors || DriveRegistered[index])
+            continue;
+        struct drive_s *drive = &VirtioDrives[index];
         drive->type = DTYPE_VIRTIO_BLK;
         drive->blksize = DISK_SECTOR_SIZE;
         drive->sectors = sectors;
         drive->cntl_id = index;
-        blockgeom_translate(drive, TRANSLATION_LBA);
+        drive->max_segment_size = TRANSPORT_SECTORS * DISK_SECTOR_SIZE;
+        drive->max_segments = 1;
+        map_hd_drive(drive);
         DriveRegistered[index] = 1;
         uart_puts("[block] SeaBIOS drive_s registered (VirtIO-MMIO) index ");
         uart_dec(index); uart_newline();
@@ -39,45 +45,43 @@ arm64_block_drive_at(uint32_t index)
         uart_dec(drive->lchs.head); uart_putc('/');
         uart_dec(drive->lchs.sector); uart_newline();
     }
-    drive->sectors = sectors;
-    return drive;
 }
 
-
-
-/* AArch64 process_op intentionally uses the original struct disk_op_s and
- * returns standard SeaBIOS BIOS disk statuses. There is no INT 13h ABI. */
+/* Called by the original src/block.c flat-mode dispatcher. Chunk requests
+ * at the controller limit while preserving SeaBIOS partial completion. */
 int
-process_op(struct disk_op_s *op)
+arm64_block_process_op(struct disk_op_s *op)
 {
-    if (!op || !op->drive_fl ||
-        (op->command == CMD_READ && !op->buf_fl))
-        return DISK_RET_EPARAM;
-    u16 origcount = op->count;
-    int status = blockop_prepare(op, op->drive_fl->blksize);
-    if (status)
-        return status;
     uint32_t index;
     for (index = 0; index < ARM64_MAX_BLOCK_DRIVES; index++)
         if (op->drive_fl == arm64_block_drive_at(index))
             break;
-    if (index == ARM64_MAX_BLOCK_DRIVES ||
-        op->drive_fl->type != DTYPE_VIRTIO_BLK)
-        status = DISK_RET_EPARAM;
-    else if (op->command != CMD_READ)
-        status = default_process_op(op);
-    else if (!op->count)
-        status = DISK_RET_EPARAM;
-    else if (op->lba >= op->drive_fl->sectors ||
-             op->count > op->drive_fl->sectors - op->lba)
-        status = DISK_RET_EADDRNOTFOUND;
-    else if (op->count > 16)
-        status = DISK_RET_EBOUNDARY; /* backend ring currently max 16 */
-    else
-        status = arm64_virtio_blk_read_many_transport_at(
-            index, op->lba, op->buf_fl, op->count)
-            ? DISK_RET_ECONTROLLER : DISK_RET_SUCCESS;
-    return blockop_finish(op, origcount, status);
+    if (index == ARM64_MAX_BLOCK_DRIVES)
+        return DISK_RET_ENOTREADY;
+    if (op->command == CMD_WRITE)
+        return DISK_RET_EWRITEPROTECT;
+    if (op->command != CMD_READ)
+        return default_process_op(op);
+    if (!op->count)
+        return DISK_RET_EPARAM;
+    if (op->lba >= op->drive_fl->sectors ||
+        op->count > op->drive_fl->sectors - op->lba)
+        return DISK_RET_EADDRNOTFOUND;
+
+    u16 requested = op->count, completed = 0;
+    while (completed < requested) {
+        u16 count = requested - completed;
+        if (count > TRANSPORT_SECTORS)
+            count = TRANSPORT_SECTORS;
+        if (arm64_virtio_blk_read_many_transport_at(
+                index, op->lba + completed,
+                (u8 *)op->buf_fl + (u32)completed * DISK_SECTOR_SIZE, count)) {
+            op->count = completed;
+            return DISK_RET_ECONTROLLER;
+        }
+        completed += count;
+    }
+    return DISK_RET_SUCCESS;
 }
 
 int arm64_virtio_blk_read_many_at(uint32_t index, uint64_t lba,

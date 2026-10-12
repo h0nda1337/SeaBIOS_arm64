@@ -2,12 +2,14 @@
 #ifndef SEABIOS_ARM64_BOOTORDER_H
 #define SEABIOS_ARM64_BOOTORDER_H
 
-/* The exact linked-list primitive is reused from the original SeaBIOS. */
-#include "../../src/list.h"
+/* Original SeaBIOS IPL record, registration and stable list insertion. */
+#include "../../src/bootlist.h"
 #include <stdint.h>
 
 struct arm64_boot_target {
-    struct hlist_node link;
+    struct bootentry_s entry;
+    /* Relative fallback policy for this architecture's boot mechanisms.
+     * The shared entry records the effective fw_cfg/default priority. */
     int priority;
     const char *name;
     /* Upstream fw_cfg bootorder glob; NULL for non-device candidates. */

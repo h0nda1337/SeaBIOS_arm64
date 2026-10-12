@@ -15,6 +15,7 @@
 #include "hw/usb.h" // struct usbdevice_s
 #include "list.h" // hlist_node
 #include "bootprio.h" // shared original bootorder matcher
+#include "bootlist.h" // shared original IPL registration and ordering
 #include "malloc.h" // free
 #include "output.h" // dprintf
 #include "romfile.h" // romfile_loadint
@@ -436,7 +437,7 @@ int bootprio_find_usb(struct usbdevice_s *usbdev, int lun)
 static int BootRetryTime;
 static int CheckFloppySig = 1;
 
-#define DEFAULT_PRIO           9999
+#define DEFAULT_PRIO           BOOT_PRIO_DEFAULT
 
 static int DefaultFloppyPrio = 101;
 static int DefaultCDPrio     = 102;
@@ -481,26 +482,7 @@ boot_init(void)
  * BootList handling
  ****************************************************************/
 
-struct bootentry_s {
-    int type;
-    union {
-        u32 data;
-        struct segoff_s vector;
-        struct drive_s *drive;
-    };
-    int priority;
-    const char *description;
-    struct hlist_node node;
-};
 static struct hlist_head BootList VARVERIFY32INIT;
-
-#define IPL_TYPE_FLOPPY      0x01
-#define IPL_TYPE_HARDDISK    0x02
-#define IPL_TYPE_CDROM       0x03
-#define IPL_TYPE_CBFS        0x20
-#define IPL_TYPE_BEV         0x80
-#define IPL_TYPE_BCV         0x81
-#define IPL_TYPE_HALT        0xf0
 
 static void
 bootentry_add(int type, int prio, u32 data, const char *desc)
@@ -512,35 +494,10 @@ bootentry_add(int type, int prio, u32 data, const char *desc)
         warn_noalloc();
         return;
     }
-    be->type = type;
-    be->priority = prio;
     be->data = data;
-    be->description = desc ?: "?";
+    bootlist_add(&BootList, be, type, prio, desc);
     dprintf(3, "Registering bootable: %s (type:%d prio:%d data:%x)\n"
             , be->description, type, prio, data);
-
-    // Add entry in sorted order.
-    struct hlist_node **pprev;
-    struct bootentry_s *pos;
-    hlist_for_each_entry_pprev(pos, pprev, &BootList, node) {
-        struct bootprio_key incoming = {
-            .priority = be->priority, .type = be->type,
-        };
-        struct bootprio_key existing = {
-            .priority = pos->priority, .type = pos->type,
-        };
-        if (be->type <= IPL_TYPE_CDROM) {
-            incoming.drive_type = be->drive->type;
-            incoming.controller_id = be->drive->cntl_id;
-        }
-        if (pos->type <= IPL_TYPE_CDROM) {
-            existing.drive_type = pos->drive->type;
-            existing.controller_id = pos->drive->cntl_id;
-        }
-        if (bootprio_precedes(&incoming, &existing))
-            break;
-    }
-    hlist_add(&be->node, pprev);
 }
 
 // Return the given priority if it's set - defaultprio otherwise.
@@ -772,9 +729,7 @@ interactive_bootmenu(void)
     printf("\n");
 
     // Find entry and make top priority.
-    hlist_del(&boot->node);
-    boot->priority = 0;
-    hlist_add_head(&boot->node, &BootList);
+    bootlist_move_first(&BootList, boot);
 }
 
 // BEV (Boot Execution Vector) list

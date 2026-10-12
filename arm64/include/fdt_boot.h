@@ -2,6 +2,7 @@
 #ifndef SEABIOS_ARM64_FDT_BOOT_H
 #define SEABIOS_ARM64_FDT_BOOT_H
 #include <stdint.h>
+#define ARM64_FDT_BOOTARG_MAX 255u
 
 /* Rebuild /chosen while preserving existing devices and memory reservations.
  * The result lives in firmware-owned reserved memory and is valid until jump.

@@ -5,10 +5,23 @@
 //
 // This file may be distributed under the terms of the GNU LGPLv3 license.
 
+#if CONFIG_AARCH64
+#include "../arm64/include/arm64.h"
+#include "types.h"
+#include "../arm64/include/seabios_compat.h"
+#define GET_GLOBAL(v) (v)
+#define GET_FLATPTR(v) (v)
+#define BUILD_MAX_EXTDRIVE ARM64_MAX_BLOCK_DRIVES
+#define MODESEGMENT 0
+#define DEBUG_HDL_13 9
+#else
 #include "biosvar.h" // GET_GLOBAL
+#endif
 #include "block.h" // process_op
 #include "blockpolicy.h" // shared request policy
 #include "blockgeom.h" // shared SeaBIOS CHS translation
+#include "std/disk.h" // struct dpte_s
+#if !CONFIG_AARCH64
 #include "hw/ata.h" // process_ata_op
 #include "hw/ahci.h" // process_ahci_op
 #include "hw/esp-scsi.h" // esp_scsi_process_op
@@ -29,16 +42,21 @@
 #include "std/disk.h" // struct dpte_s
 #include "string.h" // checksum
 #include "util.h" // process_floppy_op
+#endif
 
 u8 FloppyCount VARFSEG;
 u8 CDCount;
 struct drive_s *IDMap[3][BUILD_MAX_EXTDRIVE] VARFSEG;
 u8 *bounce_buf_fl VARFSEG;
+#if CONFIG_AARCH64
+static u8 HDCount;
+#endif
 
 struct drive_s *
 getDrive(u8 exttype, u8 extdriveoffset)
 {
-    if (extdriveoffset >= ARRAY_SIZE(IDMap[0]))
+    if (exttype >= ARRAY_SIZE(IDMap) ||
+        extdriveoffset >= ARRAY_SIZE(IDMap[0]))
         return NULL;
     return GET_GLOBAL(IDMap[exttype][extdriveoffset]);
 }
@@ -46,13 +64,28 @@ getDrive(u8 exttype, u8 extdriveoffset)
 int getDriveId(u8 exttype, struct drive_s *drive)
 {
     ASSERT32FLAT();
+    if (!drive || exttype >= ARRAY_SIZE(IDMap))
+        return -1;
     int i;
-    for (i = 0; i < ARRAY_SIZE(IDMap[0]); i++)
+    for (i = 0; i < (int)ARRAY_SIZE(IDMap[0]); i++)
         if (getDrive(exttype, i) == drive)
             return i;
     return -1;
 }
 
+// Find spot to add a drive (shared native and x86 drive registry).
+static void
+add_drive(struct drive_s **idmap, u8 *count, struct drive_s *drive)
+{
+    if (*count >= ARRAY_SIZE(IDMap[0])) {
+        warn_noalloc();
+        return;
+    }
+    idmap[*count] = drive;
+    *count = *count + 1;
+}
+
+#if !CONFIG_AARCH64
 int create_bounce_buf(void)
 {
     if (bounce_buf_fl)
@@ -172,18 +205,6 @@ fill_fdpt(struct drive_s *drive, int hdid)
     else
         SET_IVT(0x46, SEGOFF(get_ebda_seg(), offsetof(
                                  struct extended_bios_data_area_s, fdpt[1])));
-}
-
-// Find spot to add a drive
-static void
-add_drive(struct drive_s **idmap, u8 *count, struct drive_s *drive)
-{
-    if (*count >= ARRAY_SIZE(IDMap[0])) {
-        warn_noalloc();
-        return;
-    }
-    idmap[*count] = drive;
-    *count = *count + 1;
 }
 
 // Map a hard drive
@@ -534,10 +555,43 @@ process_op_16(struct disk_op_s *op)
     }
 }
 
+#else // Native AArch64 has flat pointers and no BDA, FDPT or mode switches.
+void
+map_hd_drive(struct drive_s *drive)
+{
+    if (getDriveId(EXTTYPE_HD, drive) >= 0)
+        return;
+    add_drive(IDMap[EXTTYPE_HD], &HDCount, drive);
+    blockgeom_translate(drive, TRANSLATION_LBA);
+}
+
+void
+block_setup(void)
+{
+    arm64_block_setup();
+}
+
+int
+process_op_32(struct disk_op_s *op)
+{
+    switch (op->drive_fl->type) {
+    case DTYPE_VIRTIO_BLK:
+        return arm64_block_process_op(op);
+    default:
+        return DISK_RET_EPARAM;
+    }
+}
+#endif
+
 // Execute a disk_op_s request.
 int
 process_op(struct disk_op_s *op)
 {
+#if CONFIG_AARCH64
+    if (!op || !op->drive_fl ||
+        (op->command == CMD_READ && !op->buf_fl))
+        return DISK_RET_EPARAM;
+#endif
     dprintf(DEBUG_HDL_13, "disk_op d=%p lba=%d buf=%p count=%d cmd=%d\n"
             , op->drive_fl, (u32)op->lba, op->buf_fl
             , op->count, op->command);
@@ -546,9 +600,11 @@ process_op(struct disk_op_s *op)
     int ret = blockop_prepare(op, GET_FLATPTR(op->drive_fl->blksize));
     if (ret)
         return ret;
+#if !CONFIG_AARCH64
     if (MODESEGMENT)
         ret = process_op_16(op);
     else
+#endif
         ret = process_op_32(op);
     return blockop_finish(op, origcount, ret);
 }

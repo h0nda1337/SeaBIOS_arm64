@@ -1,11 +1,14 @@
-# SeaBIOS-ARM64 v1.2-dev (experimental)
+# SeaBIOS-ARM64 v1.5-dev (experimental)
 
 Milestone: [v1.0 genuine Linux ARM64 boot from MBR (no UEFI)](V1_MILESTONE.md).
 
 The goal is a **recognizable and maintainable port of the original SeaBIOS**,
 not a separately developed firmware that happens to share its name.
 
-- Latest technical status: [PHASE9_MULTIDRIVE.md](PHASE9_MULTIDRIVE.md)
+- Latest technical status: [PHASE13_CORE_V15.md](PHASE13_CORE_V15.md)
+- Genuine Debian systemd on ext4: [DEBIAN_EXT4_ROOT.md](DEBIAN_EXT4_ROOT.md)
+- Windows constraints: [WINDOWS_ARM64_CONSTRAINTS.md](WINDOWS_ARM64_CONSTRAINTS.md)
+- Earlier multidrive stage: [PHASE9_MULTIDRIVE.md](PHASE9_MULTIDRIVE.md)
 - Shared POST: [PHASE8_POSTFLOW.md](PHASE8_POSTFLOW.md)
 - Previous shared-core stage: [PHASE5_SHARED_CORE.md](PHASE5_SHARED_CORE.md)
 - Legacy MBR FAT32: [PHASE4_LEGACY_MBR.md](PHASE4_LEGACY_MBR.md)

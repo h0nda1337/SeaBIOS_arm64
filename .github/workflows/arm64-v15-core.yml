@@ -1,0 +1,134 @@
+name: SeaBIOS ARM64 v1.5 shared core and Debian ext4
+on:
+  push:
+    branches: [experimental/arm64-core-v1.5]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and QEMU tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm gcc make python3 qemu-system-arm
+      - name: Build and validate shared SeaBIOS core
+        run: |
+          set -euo pipefail
+          make ARCH=arm64 -j2
+          for target in test qemu-test qemu-multidrive-test qemu-multiboot-test \
+              qemu-fat-linux-test qemu-disk-test qemu-legacy-test qemu-reloc-test \
+              qemu-bootorder-test qemu-bootlist-test qemu-fat-corrupt-test \
+              qemu-block-failure-test; do
+            make ARCH=arm64 "$target" 2>&1 | tee "arm64/out/ci-$target.log"
+          done
+          make -j2
+          test "$(stat -c%s out/bios.bin)" -eq 262144
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seabios-v15-core-evidence
+          path: |
+            arm64/out/*.log
+            arm64/out/seabios-arm64.bin
+            arm64/out/firmware.map
+            out/bios.bin
+  debian-linux:
+    runs-on: ubuntu-24.04
+    needs: core-regressions
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install real Linux fixture tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm make python3 qemu-system-arm \
+            qemu-user-static binfmt-support debootstrap e2fsprogs gnupg curl
+      - name: Obtain verified Debian ARM64 Image
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/seabios-linux
+          curl -fLS --retry 3 -o /tmp/seabios-linux/kernel.deb \
+            'https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-image-6.12.111%2Bdeb13-cloud-arm64-unsigned_6.12.111-1_arm64.deb'
+          echo '88926feba4ab6db49c6ce072f099640cd14512af8b47a1fa2394b8d596f688da  /tmp/seabios-linux/kernel.deb' | sha256sum -c -
+          test "$(dpkg-deb --field /tmp/seabios-linux/kernel.deb Architecture)" = arm64
+          dpkg-deb -x /tmp/seabios-linux/kernel.deb /tmp/seabios-linux/kernel
+          python3 - <<'PY'
+          import gzip
+          from pathlib import Path
+          cache = Path('/tmp/seabios-linux')
+          kernels = list((cache / 'kernel/boot').glob('vmlinuz-*'))
+          assert len(kernels) == 1
+          data = kernels[0].read_bytes()
+          if data[:2] == b'\x1f\x8b':
+              data = gzip.decompress(data)
+          assert data[0x38:0x3c] == b'ARM\x64'
+          (cache / 'Image').write_bytes(data)
+          PY
+          make ARCH=arm64 -j2
+      - name: Verify genuine Linux FAT32 and raw MBR boots
+        run: |
+          set -euo pipefail
+          for format in raw fat32; do
+            flags=()
+            if [ "$format" = fat32 ]; then flags+=(--fat32); fi
+            for version in v1 v2; do
+              mode=()
+              if [ "$version" = v2 ]; then mode+=(--modern-virtio); fi
+              python3 arm64/tests/test_qemu_real_linux.py \
+                --image /tmp/seabios-linux/Image --secondary-disk \
+                "${flags[@]}" "${mode[@]}" --timeout 110 \
+                --log "arm64/out/real-linux-$format-$version.log"
+            done
+          done
+      - name: Install Debian ARM64 root filesystem
+        run: |
+          set -euo pipefail
+          curl -fLS --retry 3 -o /tmp/seabios-linux/archive-key.asc \
+            https://ftp-master.debian.org/keys/archive-key-13.asc
+          test "$(gpg --show-keys --with-colons /tmp/seabios-linux/archive-key.asc | awk -F: '$1=="fpr" {print $10; exit}')" \
+            = 04B54C3CDCA79751B16BC6B5225629DF75B188BD
+          gpg --dearmor < /tmp/seabios-linux/archive-key.asc > /tmp/seabios-linux/trixie.gpg
+          sudo update-binfmts --enable qemu-aarch64
+          sudo debootstrap --keyring=/tmp/seabios-linux/trixie.gpg \
+            --arch=arm64 --foreign --variant=minbase \
+            --include=systemd-sysv,busybox-static,kmod \
+            trixie /tmp/seabios-linux/rootfs https://deb.debian.org/debian \
+            /usr/share/debootstrap/scripts/sid
+          sudo cp /usr/bin/qemu-aarch64-static /tmp/seabios-linux/rootfs/usr/bin/
+          sudo chroot /tmp/seabios-linux/rootfs /debootstrap/debootstrap --second-stage
+          sudo cp -a /tmp/seabios-linux/kernel/usr/lib/modules /tmp/seabios-linux/rootfs/usr/lib/
+          sudo chroot /tmp/seabios-linux/rootfs depmod -a 6.12.111+deb13-cloud-arm64
+          sudo chroot /tmp/seabios-linux/rootfs dpkg-query -W > arm64/out/debian-root-packages.txt
+          sudo python3 arm64/tools/create_debian_root_disk.py \
+            --image /tmp/seabios-linux/Image --output /tmp/seabios-linux/debian-ext4.img \
+            --rootfs /tmp/seabios-linux/rootfs \
+            --busybox /tmp/seabios-linux/rootfs/usr/bin/busybox \
+            --modules /tmp/seabios-linux/kernel/usr/lib/modules
+          sudo chmod a+r /tmp/seabios-linux/debian-ext4.img
+      - name: Verify systemd on writable ext4, both transports and disk positions
+        run: |
+          set -euo pipefail
+          for version in v1 v2; do
+            mode=()
+            if [ "$version" = v2 ]; then mode+=(--modern-virtio); fi
+            for placement in disk0 disk1 lowram; do
+              flags=()
+              if [ "$placement" = disk1 ]; then flags+=(--secondary-disk); fi
+              if [ "$placement" = lowram ]; then flags+=(--memory 128M); fi
+              python3 arm64/tests/test_qemu_root_linux.py \
+                --disk /tmp/seabios-linux/debian-ext4.img "${mode[@]}" "${flags[@]}" \
+                --check-bad-cmdlines --timeout 120 \
+                --log "arm64/out/debian-ext4-$placement-$version.log"
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seabios-v15-debian-linux-evidence
+          path: |
+            arm64/out/*.log
+            arm64/out/debian-root-packages.txt

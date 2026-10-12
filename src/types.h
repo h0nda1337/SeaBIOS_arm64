@@ -155,7 +155,9 @@ extern void __force_link_error__only_in_16bit(void) __noreturn;
 #define barrier() __asm__ __volatile__("": : :"memory")
 
 #define noinline __attribute__((noinline))
+#ifndef __always_inline
 #define __always_inline inline __attribute__((always_inline))
+#endif
 #define __malloc __attribute__((__malloc__))
 #define __attribute_const __attribute__((__const__))
 

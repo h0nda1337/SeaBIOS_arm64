@@ -9,6 +9,8 @@ extern void uart_puts(const char *text);
 /* Bootorder matching comes from the same source as the original x86
  * SeaBIOS; the AArch64 boot *mechanisms* are still architecture-specific. */
 static struct hlist_head BootTargets;
+static struct bootentry_s BootHalt;
+static int BootHaltRegistered;
 static const char *DiskPath;
 /* Each firmware pathname has static lifetime and belongs to its VirtIO disk. */
 static char BootPaths[ARM64_MAX_BLOCK_DRIVES][32];
@@ -64,54 +66,61 @@ int arm64_bootprio_find(const char *path)
 
 void arm64_boot_register(struct arm64_boot_target *target)
 {
+    if (!target || !target->attempt)
+        return;
     if (!target->firmware_path && target->priority < 10)
         target->firmware_path = DiskPath;
+    /* fw_cfg ranks start at 1; the legacy ARM-only priorities (3/5/10)
+     * must not compete with explicit device ranks. Keep fallback mechanisms
+     * in their existing relative order after all bounded bootorder ranks. */
+    int priority = BOOT_PRIO_DEFAULT;
+    if (target->priority > 0 && target->priority <= BOOT_PRIO_DEFAULT)
+        priority += target->priority;
     if (target->firmware_path) {
         uart_puts("[boot] device firmware path: ");
         uart_puts(target->firmware_path);
         uart_puts("\n");
         int rank = arm64_bootprio_find(target->firmware_path);
         if (rank >= 0) {
-            target->priority = rank;
+            priority = rank;
             uart_puts("[boot] fw_cfg priority matched: ");
-            uart_puts(target->name);
+            uart_puts(target->name ?: "?");
             uart_puts("\n");
         }
     }
-    struct hlist_node **link = &BootTargets.first;
-    while (*link) {
-        struct arm64_boot_target *current =
-            container_of(*link, struct arm64_boot_target, link);
-        /* SeaBIOS x86's actual IPL sorting policy. Disk-like options
-         * precede non-disk diagnostic options when priorities tie. */
-        struct bootprio_key incoming = {
-            .priority = target->priority,
-            .type = target->firmware_path ? 2 : 0x80,
-        };
-        struct bootprio_key existing = {
-            .priority = current->priority,
-            .type = current->firmware_path ? 2 : 0x80,
-        };
-        if (bootprio_precedes(&incoming, &existing))
+    /* Bind the original IPL record to the actual registered SeaBIOS drive,
+     * so equal priorities use drive->type/cntl_id, just as on x86. */
+    target->entry.drive = NULL;
+    for (uint32_t disk = 0; disk < ARM64_MAX_BLOCK_DRIVES; ++disk)
+        if (target->firmware_path &&
+            target->firmware_path == arm64_boot_disk_path(disk)) {
+            target->entry.drive = arm64_block_drive_at(disk);
             break;
-        link = &(*link)->next;
-    }
-    hlist_add(&target->link, link);
+        }
+    bootlist_add(&BootTargets, &target->entry,
+                  target->firmware_path ? IPL_TYPE_HARDDISK : IPL_TYPE_BEV,
+                  priority, target->name);
 }
 
 void arm64_boot_execute(void)
 {
-    /* SeaBIOS x86's HALT entry means strict bootorder: do not attempt
-     * fallback targets that appear after the HALT priority. */
+    /* Register the same IPL_TYPE_HALT sentinel as x86 bcv_prepboot(). It
+     * participates in the original list sort, including type tie-breaking. */
     const int halt_rank = arm64_bootprio_find("HALT");
-    struct arm64_boot_target *target;
-    hlist_for_each_entry(target, &BootTargets, link) {
-        if (halt_rank >= 0 && target->priority >= halt_rank) {
+    if (halt_rank >= 0 && !BootHaltRegistered) {
+        bootlist_add(&BootTargets, &BootHalt, IPL_TYPE_HALT, halt_rank, "HALT");
+        BootHaltRegistered = 1;
+    }
+    struct bootentry_s *entry;
+    hlist_for_each_entry(entry, &BootTargets, node) {
+        if (entry->type == IPL_TYPE_HALT) {
             uart_puts("[boot] strict SeaBIOS bootorder HALT reached\n");
             break;
         }
+        struct arm64_boot_target *target =
+            container_of(entry, struct arm64_boot_target, entry);
         uart_puts("[boot] probing: ");
-        uart_puts(target->name);
+        uart_puts(entry->description);
         uart_puts("\n");
         int status = target->attempt(target->context);
         if (status == 0)

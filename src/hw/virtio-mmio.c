@@ -36,6 +36,7 @@
 #define MMIO_QUEUE_DRV_HI    0x094u
 #define MMIO_QUEUE_DEV_LO    0x0a0u
 #define MMIO_QUEUE_DEV_HI    0x0a4u
+#define MMIO_CONFIG_GENERATION 0x0fcu
 #define MMIO_BLK_CAPACITY_LO 0x100u
 #define MMIO_BLK_CAPACITY_HI 0x104u
 #define VIRTIO_MAGIC        0x74726976u
@@ -45,12 +46,15 @@
 #define MAX_READ_SECTORS    16u
 /* Bounded polling is necessary until PSCI timers and IRQ/GIC exist. */
 #define WAIT_SPINS          5000000u
+#define DEVICE_NEEDS_RESET  64u
 
 /* Independent split rings per device, not one global VirtIO context.
  * The same upstream SeaBIOS ring implementation is used for every disk. */
 struct arm64_block_device {
     uintptr_t base;
     uint64_t sectors;
+    uint8_t failed;
+    uint8_t version;
     struct vring_virtqueue queue __attribute__((aligned(4096)));
     struct vp_device transport;
     struct virtio_blk_outhdr request __attribute__((aligned(16)));
@@ -82,6 +86,46 @@ static void wraddr(uintptr_t base, unsigned lowoff, uintptr_t value)
     wr(base, lowoff + 4u, (uint32_t)((uint64_t)value >> 32));
 }
 
+/* Reset completion precedes reuse of queue storage or OS ownership. */
+static int block_reset(uintptr_t base)
+{
+    wr(base, MMIO_STATUS, 0u);
+    arm64_virtio_barrier();
+    uint64_t deadline = arm64_timer_deadline_ms(2000);
+    uint32_t spins = WAIT_SPINS;
+    while (rd(base, MMIO_STATUS)) {
+        if (!spins-- || arm64_timer_expired(deadline))
+            return -1;
+        __asm__ volatile("yield" ::: "memory");
+    }
+    arm64_virtio_barrier();
+    return 0;
+}
+
+/* A modern capacity is atomic only across matching config generations.
+ * Legacy MMIO has no generation register, so require two matching reads. */
+static int block_capacity(uintptr_t base, uint32_t version, uint64_t *capacity)
+{
+    for (uint32_t retry = 0; retry < 32u; ++retry) {
+        uint32_t generation = version == 2u ? rd(base, MMIO_CONFIG_GENERATION) : 0;
+        uint64_t first = rd(base, MMIO_BLK_CAPACITY_LO);
+        first |= (uint64_t)rd(base, MMIO_BLK_CAPACITY_HI) << 32;
+        arm64_virtio_barrier();
+        if (version == 2u) {
+            if (generation != rd(base, MMIO_CONFIG_GENERATION))
+                continue;
+        } else {
+            uint64_t second = rd(base, MMIO_BLK_CAPACITY_LO);
+            second |= (uint64_t)rd(base, MMIO_BLK_CAPACITY_HI) << 32;
+            if (first != second)
+                continue;
+        }
+        *capacity = first;
+        return first ? 0 : -1;
+    }
+    return -1;
+}
+
 void vp_notify(struct vp_device *vp, struct vring_virtqueue *vq)
 {
     (void)vq;
@@ -107,8 +151,8 @@ static int block_init(uintptr_t base)
     uint8_t *raw = (uint8_t *)vq;
     for (uint32_t i = 0; i < sizeof(*vq); ++i)
         raw[i] = 0;
-    wr(base, MMIO_STATUS, 0u);
-    arm64_virtio_barrier();
+    if (block_reset(base))
+        return -1;
     wr(base, MMIO_STATUS, VIRTIO_CONFIG_S_ACKNOWLEDGE |
                           VIRTIO_CONFIG_S_DRIVER);
     if (version == 2u) {
@@ -161,9 +205,8 @@ static int block_init(uintptr_t base)
             goto error;
     }
     /* Read the 512-byte-sector count from device config. */
-    uint64_t sectors = ((uint64_t)rd(base, MMIO_BLK_CAPACITY_HI) << 32) |
-                       rd(base, MMIO_BLK_CAPACITY_LO);
-    if (!sectors)
+    uint64_t sectors;
+    if (block_capacity(base, version, &sectors))
         goto error;
     wr(base, MMIO_STATUS, VIRTIO_CONFIG_S_ACKNOWLEDGE |
                           VIRTIO_CONFIG_S_DRIVER |
@@ -173,6 +216,8 @@ static int block_init(uintptr_t base)
         goto error;
     dev->base = base;
     dev->sectors = sectors;
+    dev->failed = 0;
+    dev->version = version;
     dev->transport.mmio = base;
     ++BlockCount;
     return 0;
@@ -190,33 +235,46 @@ int arm64_virtio_blk_read_many_transport_at(uint32_t index, uint64_t lba,
         count > MAX_READ_SECTORS)
         return -1;
     struct arm64_block_device *dev = &BlockDevs[index];
-    if (!dev->base || lba >= dev->sectors || count > dev->sectors - lba)
+    if (!dev->base || dev->failed ||
+        lba >= dev->sectors || count > dev->sectors - lba)
         return -1;
     dev->request.type = VIRTIO_BLK_T_IN;
     dev->request.ioprio = 0;
     dev->request.sector = lba;
     dev->status = 0xffu;
+    /* Legacy devices may not report a usable used.len (VirtIO 5.2.6.3).
+     * Clear the bounce buffer so a short buggy reply cannot reuse old data. */
+    if (dev->version == 1u)
+        for (uint32_t i = 0; i < SECTOR_SIZE * count; ++i)
+            dev->transfer[i] = 0;
     struct vring_list sg[] = {
         { (char *)&dev->request, sizeof(dev->request) },
         { (char *)dev->transfer, SECTOR_SIZE * count },
         { (char *)&dev->status, 1 },
     };
+    uint16_t head = dev->queue.free_head;
     vring_add_buf(&dev->queue, sg, 1, 2, 0, 0);
     vring_kick(&dev->transport, &dev->queue, 1);
     uint32_t spins = WAIT_SPINS;
     uint64_t deadline = arm64_timer_deadline_ms(2000);
     while (!vring_more_used(&dev->queue) && spins--) {
-        if (arm64_timer_expired(deadline)) break;
+        if (arm64_timer_expired(deadline) ||
+            (rd(dev->base, MMIO_STATUS) & DEVICE_NEEDS_RESET)) break;
         __asm__ volatile("yield" ::: "memory");
     }
     arm64_virtio_barrier();
     struct vring_virtqueue *q = &dev->queue;
     if (!vring_more_used(q) ||
-        q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].id >= VIRTQ_SIZE ||
-        q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].len
-            < SECTOR_SIZE * count + 1 || dev->status != VIRTIO_BLK_S_OK) {
-        wr(dev->base, MMIO_STATUS, 0);
-        dev->base = 0;
+        (uint16_t)(q->vring.used->idx - q->last_used_idx) != 1u ||
+        q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].id != head ||
+        (dev->version == 2u &&
+         q->vring.used->ring[q->last_used_idx % VIRTQ_SIZE].len
+            != SECTOR_SIZE * count + 1) || dev->status != VIRTIO_BLK_S_OK ||
+        (rd(dev->base, MMIO_STATUS) & DEVICE_NEEDS_RESET)) {
+        block_reset(dev->base);
+        dev->failed = 1;
+        uart_puts("[virtio-blk] controller failed; isolated disk ");
+        uart_dec(index); uart_newline();
         return -2;
     }
     vring_get_buf(q, NULL);
@@ -241,12 +299,13 @@ uint32_t arm64_virtio_blk_count(void)
 
 uintptr_t arm64_virtio_blk_mmio_at(uint32_t index)
 {
-    return index < BlockCount ? BlockDevs[index].base : 0;
+    return index < BlockCount && !BlockDevs[index].failed
+        ? BlockDevs[index].base : 0;
 }
 
 uint64_t arm64_virtio_blk_capacity_at(uint32_t index)
 {
-    return index < BlockCount && BlockDevs[index].base
+    return index < BlockCount && BlockDevs[index].base && !BlockDevs[index].failed
         ? BlockDevs[index].sectors : 0;
 }
 
@@ -258,6 +317,21 @@ uintptr_t arm64_virtio_blk_mmio(void)
 uint64_t arm64_virtio_blk_capacity(void)
 {
     return arm64_virtio_blk_capacity_at(0);
+}
+
+int arm64_virtio_quiesce(void)
+{
+    for (uint32_t index = 0; index < BlockCount; ++index) {
+        /* Keep the address even after failure so cleanup can verify reset. */
+        if (block_reset(BlockDevs[index].base)) {
+            uart_puts("[virtio-blk] cannot stop DMA; refusing handoff\n");
+            return -1;
+        }
+        BlockDevs[index].failed = 1;
+    }
+    if (BlockCount)
+        uart_puts("[virtio-blk] all queues reset before native handoff\n");
+    return 0;
 }
 
 void arm64_virtio_discover(const struct fdt_info *info)
